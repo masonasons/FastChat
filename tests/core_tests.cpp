@@ -625,6 +625,20 @@ static void TestAgents(const std::string& root) {
     for (const auto& m : lq.messages) gotIt = gotIt || m.content == "Got: One more thing";
     CHECK(gotIt);
 
+    // A message sent before the model's answer started streaming, which Claude
+    // Code runs as a turn of its own: its approvals still get through (standard
+    // input stays open until Claude Code has taken in every message).
+    std::cout << "  claude code: approval in a turn of a message sent while it works\n";
+    ChatTurn liveTools = live;
+    liveTools.tools = true;
+    liveTools.toolContext.root = root;
+    liveTools.toolContext.commandApproval = "auto";
+    TestListener lw = Drive(liveTools, [](ChatRunner& r) { r.Enqueue(UserMessage("Then write it down")); });
+    CHECK(lw.outcome == ChatListener::Outcome::Done);
+    bool allowed = false;
+    for (const auto& m : lw.messages) allowed = allowed || m.content == "Got: Then write it down (allow)";
+    CHECK(allowed);
+
     std::cout << "  claude code: subagent and background shell\n";
     ChatTurn agentTurn = live;
     agentTurn.tools = true;

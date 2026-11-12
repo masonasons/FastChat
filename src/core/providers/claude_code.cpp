@@ -9,6 +9,7 @@
 #include <chrono>
 #include <map>
 #include <optional>
+#include <set>
 
 namespace {
 
@@ -45,6 +46,13 @@ std::string Describe(const std::string& name, const json& input, const std::stri
     if (name == "Task" || name == "Agent") return "Agent: " + Str(input, "description");
     if (name == "TodoWrite") return "Update the to-do list";
     return name + " " + OneLine(JsonDump(input), 100);
+}
+
+// An id for a message written to Claude Code, in a UUID's form, which it
+// echoes back once it has taken the message in.
+std::string MessageUuid() {
+    std::string id = NewId();
+    return id.substr(0, 8) + "-" + id.substr(8, 4) + "-" + id.substr(12, 4) + "-" + id.substr(16, 4) + "-" + id.substr(20, 12);
 }
 
 std::string ResultText(const json& content) {
@@ -171,7 +179,8 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         return result;
     }
     std::vector<std::string> argv = {program, "-p", "--output-format", "stream-json", "--input-format", "stream-json",
-                                     "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio"};
+                                     "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio",
+                                     "--replay-user-messages"};
     const ChatRequest& req = turn.request;
     if (!req.model.empty() && req.model != "default") {
         argv.push_back("--model");
@@ -209,8 +218,17 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         result.error = error;
         return result;
     }
-    json first = {{"type", "user"}, {"message", {{"role", "user"}, {"content", AgentPrompt(turn)}}}};
-    child.Write(JsonDump(first) + "\n");
+    // Messages written but not yet taken in: Claude Code echoes each one back
+    // (--replay-user-messages) when it takes it in, during a turn or as a turn
+    // of its own after the last one.
+    std::set<std::string> waiting;
+    auto send = [&](const std::string& content) {
+        std::string uuid = MessageUuid();
+        json msg = {{"type", "user"}, {"uuid", uuid}, {"message", {{"role", "user"}, {"content", content}}}};
+        child.Write(JsonDump(msg) + "\n");
+        waiting.insert(uuid);
+    };
+    send(AgentPrompt(turn));
 
     std::string session = turn.resumeSession;
     Message pending;
@@ -262,13 +280,12 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         child.Write(JsonDump(r) + "\n");
     };
 
-    // A message written after the model's last request was in none of its
-    // requests, so Claude Code runs it as another turn once this one ends (its
-    // "dequeue"). Standard input must stay open for that turn: its approvals
-    // come back that way. Its first output can take a while (a long context, or
-    // thinking first), so wait long for it; a minute is only a fallback in case
-    // no turn comes.
-    bool wroteSinceRequest = false;
+    // A message still waiting when a turn ends is run as another turn (Claude
+    // Code's "dequeue"). Standard input must stay open for that turn: its
+    // approvals come back that way, and fail ("Stream closed") once it is
+    // closed. Its first output can take a while (a long context, or thinking
+    // first), so wait long for it; a minute is only a fallback in case no turn
+    // comes.
     bool stdinOpen = true;
     std::chrono::steady_clock::time_point closeAt{};
     double totalCost = 0;
@@ -283,10 +300,8 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         }
         if (stdinOpen && callbacks.takeQueued) {
             for (auto& m : callbacks.takeQueued()) {
-                json msg = {{"type", "user"}, {"message", {{"role", "user"}, {"content", m.content}}}};
-                child.Write(JsonDump(msg) + "\n");
+                send(m.content);
                 if (callbacks.onQueuedDelivered) callbacks.onQueuedDelivered(m);
-                wroteSinceRequest = true;
                 closeAt = {};
             }
         }
@@ -311,6 +326,11 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         if (compaction && type == "user" && topLevel) {
             const json& content = ev.value("message", json::object()).value("content", json());
             summary = content.is_string() && IsCompactSummary(content.get<std::string>());
+        }
+        if (type == "user" && (ev.value("isReplay", false) || waiting.count(Str(ev, "uuid")))) {
+            // One of ours, taken in; it is already in the conversation.
+            waiting.erase(Str(ev, "uuid"));
+            continue;
         }
         if (compaction && !summary) flushCompaction();
 
@@ -369,7 +389,6 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         } else if (type == "stream_event" && topLevel) {
             const json& e = ev.value("event", json::object());
             std::string etype = Str(e, "type");
-            if (etype == "message_start") wroteSinceRequest = false;
             if (etype == "content_block_start") {
                 const json& block = e.value("content_block", json::object());
                 if (Str(block, "type") == "tool_use" && callbacks.onToolCallStarted) callbacks.onToolCallStarted(Str(block, "name"));
@@ -463,7 +482,9 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
             flush();
             const json& request = ev.value("request", json::object());
             std::string requestId = Str(ev, "request_id");
-            if (Str(request, "subtype") == "can_use_tool") {
+            if (!stdinOpen) {
+                // Nothing can answer it; Claude Code has already given up on it.
+            } else if (Str(request, "subtype") == "can_use_tool") {
                 std::string tool = Str(request, "tool_name");
                 json input = request.value("input", json::object());
                 bool allow = false;
@@ -531,7 +552,7 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 result.error = why.empty() ? "Claude Code stopped: " + Str(ev, "subtype") : why;
                 result.errorDetails = "Claude Code reported: " + OneLine(line, 3000) + "\n";
             }
-            if (wroteSinceRequest && result.error.empty()) {
+            if (!waiting.empty() && result.error.empty()) {
                 closeAt = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             } else if (stdinOpen) {
                 child.CloseStdin();

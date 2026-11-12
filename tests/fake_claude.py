@@ -9,7 +9,10 @@ The prompt decides what happens: "write" asks to write a file (needs approval),
 "run" runs a command (no approval, like a safe command), "/compact" compacts,
 anything else is a plain answer. --resume <id> is echoed in the answer.
 Messages that arrive on stdin after the first result are answered as further
-turns ("Got: ..."), as Claude Code does with messages sent while it works.
+turns ("Got: ..."), as Claude Code does with messages sent while it works; one
+with "write" in it asks to write a file first, and that approval fails with
+"Stream closed" if stdin has closed, as Claude Code's does. With
+--replay-user-messages each message is echoed back when it is taken in.
 """
 import json
 import queue
@@ -19,6 +22,7 @@ import threading
 args = sys.argv[1:]
 resume = args[args.index("--resume") + 1] if "--resume" in args else None
 no_tools = "--tools" in args and args[args.index("--tools") + 1] == ""
+replay = "--replay-user-messages" in args
 session = resume or "sess-1"
 
 lines = queue.Queue()
@@ -55,6 +59,12 @@ def stream_text(text):
              "delta": {"type": "text_delta", "text": piece + " "}}, "parent_tool_use_id": None, "session_id": session})
 
 
+def taken_in(msg):
+    if replay:
+        out({"type": "user", "message": msg["message"], "uuid": msg.get("uuid"), "isReplay": True,
+             "parent_tool_use_id": None, "session_id": session})
+
+
 def result(cost):
     out({"type": "result", "subtype": "success", "is_error": False, "session_id": session, "total_cost_usd": cost,
          "stop_reason": "end_turn", "result": "ok",
@@ -73,6 +83,7 @@ first = next_message()
 prompt = first["message"]["content"]
 out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku-5-5",
      "tools": [] if no_tools else ["Bash", "Write"], "cwd": "."})
+taken_in(first)
 out({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
     "seven_day": {"utilization": 0.25, "resetsAt": 1794499200, "status": "allowed"}}}, "session_id": session})
 
@@ -173,7 +184,16 @@ while True:
         break
     if msg.get("type") != "user":
         continue
+    taken_in(msg)
     text = "Got: " + msg["message"]["content"]
+    if "write" in text and not no_tools:
+        out({"type": "control_request", "request_id": "req-%d" % turn, "request": {"subtype": "can_use_tool",
+             "tool_name": "Write", "input": {"file_path": "later.txt", "content": "x"}, "tool_use_id": "toolu_w%d" % turn}})
+        answer = next_message(timeout=10)
+        if not isinstance(answer, dict):
+            text += " (Stream closed)"
+        else:
+            text += " (" + answer["response"]["response"]["behavior"] + ")"
     stream_text(text)
     assistant("msg_%d" % turn, {"type": "text", "text": text})
     result(0.001)
