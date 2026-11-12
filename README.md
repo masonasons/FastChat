@@ -151,6 +151,12 @@ Windows, with Visual Studio 2022 (C++ workload), CMake 3.24+ and Git:
 build.bat
 ```
 
+To package it, run `dist.bat` (or `build.bat dist` to build first): it makes
+`FastChat.zip`, a FastChat folder with FastChat.exe and this readme. FastChat.exe
+needs nothing else; everything it uses comes with Windows. `dist.bat portable`
+makes `FastChat-portable.zip`, which keeps settings and conversations beside the
+exe instead of in %APPDATA%.
+
 It works while FastChat is running: the running FastChat.exe is renamed to
 FastChat.old.exe so the new one can be written; restart FastChat to use it.
 

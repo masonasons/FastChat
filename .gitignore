@@ -23,6 +23,10 @@ models-cache.json
 .vs/
 *.vcxproj.user
 
+# Distribution (dist.bat)
+*.zip
+dist_temp/
+
 # Misc
 *.log
 *.tmp

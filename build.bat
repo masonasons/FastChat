@@ -3,6 +3,7 @@ REM Builds FastChat.exe (Release) into this folder.
 REM   build.bat          FastChat
 REM   build.bat tests    FastChat and the core tests (build\Release\fastchat_tests.exe)
 REM   build.bat no-prism FastChat without Prism (SAPI speech only)
+REM   build.bat dist     FastChat, then FastChat.zip (dist.bat)
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -20,11 +21,13 @@ if not exist "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" (
 call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 
 set "PRISM=ON"
+set "DIST="
 set "TARGETS=--target FastChat"
 :args
 if "%~1"=="" goto :done_args
 if /i "%~1"=="no-prism" set "PRISM=OFF"
 if /i "%~1"=="tests" set "TARGETS=--target FastChat fastchat_tests"
+if /i "%~1"=="dist" set "DIST=1"
 shift
 goto :args
 :done_args
@@ -39,6 +42,11 @@ if exist FastChat.old.exe del /q FastChat.old.exe >nul 2>&1
 if exist FastChat.exe move /y FastChat.exe FastChat.old.exe >nul 2>&1
 cmake --build build --config Release --parallel %TARGETS% -- /nodeReuse:false
 if errorlevel 1 goto :error
+
+if defined DIST (
+    call "%~dp0dist.bat"
+    if errorlevel 1 goto :error
+)
 
 echo.
 echo Build successful. Run FastChat.exe to start.
