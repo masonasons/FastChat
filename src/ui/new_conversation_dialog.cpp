@@ -21,8 +21,8 @@ public:
         m_name->SetHint("Leave empty to name it automatically");
         sizer->Add(LabeledRow(this, "&Name:", m_name), 0, wxEXPAND | wxALL, 8);
 
-        wxString types[] = {"&Chat", "C&ode (work on files in a folder)"};
-        m_type = new wxRadioBox(this, wxID_ANY, "Type", wxDefaultPosition, wxDefaultSize, 2, types, 1, wxRA_SPECIFY_COLS);
+        wxString types[] = {"&Chat", "C&ode (work on files in a folder)", "Com&puter use (operate this computer)"};
+        m_type = new wxRadioBox(this, wxID_ANY, "Type", wxDefaultPosition, wxDefaultSize, 3, types, 1, wxRA_SPECIFY_COLS);
         sizer->Add(m_type, 0, wxEXPAND | wxLEFT | wxRIGHT, 8);
 
         auto* folderRow = new wxBoxSizer(wxHORIZONTAL);
@@ -65,7 +65,8 @@ public:
     NewConversationChoice Choice() const {
         NewConversationChoice c;
         c.title = S(m_name->GetValue());
-        c.type = m_type->GetSelection() == 1 ? ConversationType::Code : ConversationType::Chat;
+        int sel = m_type->GetSelection();
+        c.type = sel == 1 ? ConversationType::Code : sel == 2 ? ConversationType::Computer : ConversationType::Chat;
         c.folder = c.type == ConversationType::Code ? S(m_folder->GetValue()) : std::string();
         c.providerId = m_providerId;
         c.model = m_model;

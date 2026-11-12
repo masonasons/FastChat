@@ -6,6 +6,7 @@
 // Everything it reports arrives on the UI thread through ChatListener.
 
 #include "core/code_tools.h"
+#include "core/computer_tools.h"
 #include "core/providers/provider.h"
 
 #include <atomic>
@@ -39,7 +40,9 @@ struct ChatTurn {
     ProviderConfig provider;
     ChatRequest request;          // model, system prompt, settings; messages = the history
     bool tools = false;           // code conversation
-    ToolContext toolContext;
+    bool computer = false;        // computer use conversation
+    bool vision = true;           // the model can see images (computer use sends screenshots)
+    ToolContext toolContext;      // also the approval setting for computer use
     int maxSteps = 50;
 };
 
@@ -67,6 +70,9 @@ private:
     std::atomic<bool> m_cancel{false};
     std::atomic<bool> m_running{false};
 };
+
+// Keep the images of only the last `keep` messages that have any.
+void LimitImages(std::vector<Message>& messages, int keep);
 
 // Ask a model for a short title for a conversation (blocking; worker thread).
 std::string GenerateTitle(const ProviderConfig& provider, const std::string& model, const std::string& userText,

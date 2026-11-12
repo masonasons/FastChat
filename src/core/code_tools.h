@@ -25,6 +25,7 @@ struct ToolOutcome {
     std::string output;   // what goes back to the model
     bool error = false;
     std::string summary;  // one line for the conversation list and speech
+    std::vector<ImageData> images;  // screenshots (computer use)
 };
 
 std::vector<ToolDef> CodeToolDefinitions();

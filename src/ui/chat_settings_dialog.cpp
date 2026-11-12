@@ -100,14 +100,17 @@ private:
                 if (dlg.ShowModal() == wxID_OK) m_folder->SetValue(dlg.GetPath());
             });
 
+        }
+        if (m_conv.type == ConversationType::Code || m_conv.type == ConversationType::Computer) {
+            bool computer = m_conv.type == ConversationType::Computer;
             m_approval = new wxChoice(panel, wxID_ANY);
             m_approval->Append("Default");
-            m_approval->Append("Ask each time");
-            m_approval->Append("Run without asking");
-            m_approval->Append("Never run commands");
+            m_approval->Append(computer ? "Ask before each action" : "Ask each time");
+            m_approval->Append(computer ? "Act without asking" : "Run without asking");
+            m_approval->Append(computer ? "Only look, never act" : "Never run commands");
             const std::string& a = m_work.commandApproval;
             m_approval->SetSelection(a == "ask" ? 1 : a == "auto" ? 2 : a == "deny" ? 3 : 0);
-            s->Add(LabeledRow(panel, "&Commands:", m_approval, 0), 0, wxALL, 6);
+            s->Add(LabeledRow(panel, computer ? "&Actions:" : "&Commands:", m_approval, 0), 0, wxALL, 6);
         }
         panel->SetSizer(s);
         UpdateEnabled();

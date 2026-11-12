@@ -151,6 +151,7 @@ std::string MainFrame::DisplayTitle(const Conversation& c) const {
     if (c.type == ConversationType::Code && !c.folder.empty()) {
         return PathToUtf8(PathFromUtf8(c.folder).filename()) + " (code)";
     }
+    if (c.type == ConversationType::Computer) return "Untitled computer use";
     return "Untitled " + std::string(c.type == ConversationType::Code ? "code conversation" : "chat");
 }
 
@@ -277,7 +278,8 @@ void MainFrame::OnNew(wxCommandEvent&) {
     c.settings.providerId = choice.providerId;
     c.settings.model = choice.model;
     if (c.title.empty() && !AppSettings().general.autoTitle) {
-        c.title = std::string(c.type == ConversationType::Code ? "Code " : "Chat ") + FormatLocalTime(NowSeconds());
+        c.title = std::string(c.type == ConversationType::Code ? "Code " : c.type == ConversationType::Computer ? "Computer use " : "Chat ") +
+                  FormatLocalTime(NowSeconds());
     }
     if (!AppDatabase().CreateConversation(c)) {
         ShowError(this, "The conversation could not be created: " + U(AppDatabase().LastError()));

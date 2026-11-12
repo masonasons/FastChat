@@ -39,8 +39,15 @@ bool GuessAdaptive(const std::string& model) {
     return StartsWith(model, "claude-");
 }
 
+json ImageBlock(const ImageData& img) {
+    return {{"type", "image"}, {"source", {{"type", "base64"}, {"media_type", img.mediaType}, {"data", img.base64}}}};
+}
+
 json UserContent(const Message& m) {
-    return json::array({{{"type", "text"}, {"text", m.content.empty() ? std::string(" ") : m.content}}});
+    json content = json::array();
+    for (const auto& img : m.images) content.push_back(ImageBlock(img));
+    content.push_back({{"type", "text"}, {"text", m.content.empty() ? std::string(" ") : m.content}});
+    return content;
 }
 
 json AssistantContent(const Message& m) {
@@ -87,6 +94,11 @@ json BuildMessages(const ChatRequest& request) {
                 json block = {{"type", "tool_result"},
                               {"tool_use_id", m.toolCallId},
                               {"content", m.content.empty() ? std::string("(no output)") : m.content}};
+                if (!m.images.empty()) {
+                    json content = json::array({{{"type", "text"}, {"text", m.content.empty() ? std::string("(no output)") : m.content}}});
+                    for (const auto& img : m.images) content.push_back(ImageBlock(img));
+                    block["content"] = content;
+                }
                 if (m.toolError) block["is_error"] = true;
                 append("user", json::array({block}));
                 break;

@@ -39,6 +39,7 @@ struct GeneralSettings {
     int maxTokens = 0;                // 0: the provider's default
     int maxToolSteps = 50;            // per message, in code conversations
     std::string commandApproval = "ask";  // "ask", "auto", "deny"
+    std::string computerApproval = "ask"; // computer use actions: "ask", "auto", "deny"
     int commandTimeoutSec = 120;
     bool focusResponse = false;           // move focus to a new response when it completes
 };

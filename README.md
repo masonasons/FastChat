@@ -7,7 +7,7 @@ providers, written in C++ with wxWidgets.
 
 - **Conversations list** (the main window). New conversation (Ctrl+N) asks for a
   name (leave it empty to have one generated after the first reply), the type -
-  chat or code - and for code, a folder.
+  chat, code or computer use - and for code, a folder.
 - **Conversation windows**: the messages, a multiline box to write in (Enter
   sends, Shift+Enter starts a new line; can be switched to Ctrl+Enter), an
   Actions button, and a status bar with the model, context used of the model's
@@ -16,6 +16,16 @@ providers, written in C++ with wxWidgets.
 - **Code conversations** give the model tools inside the folder: list, read,
   find, search, write and edit files, and run commands (asks first by default;
   can be set to run freely or never).
+- **Computer use conversations** (Windows) let a model operate this computer.
+  It sees the window in front through its accessibility tree (every control,
+  numbered, the way a screen reader reads it) and, for models that take
+  images, a screenshot. It acts on controls directly (press, set text, focus)
+  or with the keyboard and mouse (keys, typing, clicks, drags, scrolling).
+  FastChat asks before every action (Allow / Don't allow, with an option to
+  allow the rest of the conversation), never acts on its own windows, and sends
+  nothing unless the target app is really in front. Ctrl+Alt+Escape stops it
+  from any window. Coding agents (Claude Code, Codex) can't drive it; use a
+  model from an API provider.
 - **Providers** (Settings > Providers): OpenAI, Anthropic, Google Gemini,
   OpenRouter, Ollama Cloud, Ollama on your own machine, DeepSeek, Groq, Mistral,
   xAI, any OpenAI-compatible server, and the coding agents **Claude Code** and
@@ -74,6 +84,7 @@ Conversation window:
 |---|---|
 | Enter | Send (Shift+Enter: new line; Ctrl+Enter always sends) |
 | Escape | Stop the response, or close the window when nothing is running |
+| Ctrl+Alt+Escape | Stop computer use, from any window |
 | F6 | Move between the messages and the message box |
 | Alt+M / Alt+W | The messages / the message box |
 | Alt+A | Actions |
@@ -125,7 +136,10 @@ build\Release\fastchat_tests.exe
 `mock_server.py` imitates the OpenAI, Anthropic, Gemini and Ollama streaming
 APIs, and `fake_claude.py` / `fake_codex.py` imitate the two coding agents, so
 the providers, tool loops, approvals and account reports are tested without
-keys. Set `FASTCHAT_REAL_CLAUDE=1` to also run a short real Claude Code session
+keys. The desktop tests drive a small window of their own through accessibility
+only; set `FASTCHAT_TEST_INPUT=1` to also send it real keystrokes and a click
+(it takes the foreground for a moment). Set `FASTCHAT_REAL_CLAUDE=1` to also run
+a short real Claude Code session
 (a chat, an approved file write and a resume, using Haiku; it costs a fraction
 of a cent).
 

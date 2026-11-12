@@ -55,6 +55,7 @@ bool Settings::Load() {
         Get(g, "maxTokens", general.maxTokens);
         Get(g, "maxToolSteps", general.maxToolSteps);
         Get(g, "commandApproval", general.commandApproval);
+        Get(g, "computerApproval", general.computerApproval);
         Get(g, "commandTimeoutSec", general.commandTimeoutSec);
         Get(g, "focusResponse", general.focusResponse);
     }
@@ -130,6 +131,7 @@ bool Settings::Save() const {
         {"maxTokens", general.maxTokens},
         {"maxToolSteps", general.maxToolSteps},
         {"commandApproval", general.commandApproval},
+        {"computerApproval", general.computerApproval},
         {"commandTimeoutSec", general.commandTimeoutSec},
         {"focusResponse", general.focusResponse},
     };

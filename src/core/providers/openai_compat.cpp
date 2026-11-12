@@ -49,13 +49,33 @@ std::vector<std::pair<std::string, std::string>> OpenAIProvider::AuthHeaders() c
 json OpenAIProvider::BuildMessages(const ChatRequest& request) const {
     json messages = json::array();
     if (!request.systemPrompt.empty()) messages.push_back({{"role", "system"}, {"content", request.systemPrompt}});
+    // Tool messages take only text: screenshots from tool results follow, once
+    // the run of tool results is over, as a user message.
+    json pendingImages = json::array();
+    auto flushImages = [&]() {
+        if (pendingImages.empty()) return;
+        json content = json::array({{{"type", "text"}, {"text", "Screenshot from the tool results above."}}});
+        for (auto& part : pendingImages) content.push_back(part);
+        messages.push_back({{"role", "user"}, {"content", content}});
+        pendingImages = json::array();
+    };
+    auto imagePart = [](const ImageData& img) {
+        return json{{"type", "image_url"}, {"image_url", {{"url", "data:" + img.mediaType + ";base64," + img.base64}}}};
+    };
     for (const auto& m : request.messages) {
+        if (m.role != Role::Tool) flushImages();
         switch (m.role) {
             case Role::System:
                 messages.push_back({{"role", "system"}, {"content", m.content}});
                 break;
             case Role::User:
-                messages.push_back({{"role", "user"}, {"content", m.content}});
+                if (m.images.empty()) {
+                    messages.push_back({{"role", "user"}, {"content", m.content}});
+                } else {
+                    json content = json::array({{{"type", "text"}, {"text", m.content}}});
+                    for (const auto& img : m.images) content.push_back(imagePart(img));
+                    messages.push_back({{"role", "user"}, {"content", content}});
+                }
                 break;
             case Role::Assistant: {
                 json msg = {{"role", "assistant"}};
@@ -84,9 +104,11 @@ json OpenAIProvider::BuildMessages(const ChatRequest& request) const {
             }
             case Role::Tool:
                 messages.push_back({{"role", "tool"}, {"tool_call_id", m.toolCallId}, {"content", m.content}});
+                for (const auto& img : m.images) pendingImages.push_back(imagePart(img));
                 break;
         }
     }
+    flushImages();
     return messages;
 }
 

@@ -4,6 +4,8 @@
 
 #include "core/chat_engine.h"
 #include "core/code_tools.h"
+#include "core/computer_tools.h"
+#include "core/desktop.h"
 #include "core/database.h"
 #include "core/platform.h"
 #include "core/providers/provider.h"
@@ -457,6 +459,233 @@ static void TestAgents(const std::string& root) {
     CHECK(cxChat.messages.size() == 1 && cxChat.messages[0].reasoning == "sandbox=read-only");
 }
 
+// A screenshot in a tool result reaches each API where it wants it (the mock
+// answers "I see the image." only then).
+static void TestImageRequests(const std::string& base) {
+    std::cout << "Screenshots in requests:\n";
+    struct Case {
+        const char* kind;
+        const char* path;
+        const char* model;
+    };
+    for (const Case& c : {Case{"openrouter", "/openai", "mock-model"}, Case{"anthropic", "/anthropic", "claude-opus-5-5"},
+                          Case{"gemini", "/gemini", "gemini-mock"}, Case{"ollama", "/ollama", "mock:latest"}}) {
+        ProviderConfig config = MockProvider(base, c.kind, c.path);
+        ChatRequest request;
+        request.model = c.model;
+        Message user;
+        user.role = Role::User;
+        user.content = "What is on screen?";
+        Message call;
+        call.role = Role::Assistant;
+        call.toolCalls.push_back({"call_9", "look", "{}"});
+        Message result;
+        result.role = Role::Tool;
+        result.toolCallId = "call_9";
+        result.toolName = "look";
+        result.content = "Window: Notepad";
+        result.images.push_back({"image/jpeg", Base64Encode("not really a jpeg")});
+        request.messages = {user, call, result};
+        ChatResult r = CreateProvider(config)->Chat(request, StreamCallbacks(), nullptr);
+        if (!r.ok) std::cerr << "    " << c.kind << " error: " << r.error << "\n";
+        CHECK_EQ(r.text, std::string("I see the image."));
+        std::cout << "  " << c.kind << ": " << r.text << "\n";
+    }
+#ifdef _WIN32
+    // A whole computer use turn: the model looks (the real accessibility tree
+    // and a real screenshot, sent only to the local mock), sees the image, answers.
+    {
+        std::mutex mutex;
+        std::deque<std::function<void()>> queue;
+        auto runner = std::make_shared<ChatRunner>([&](std::function<void()> fn) {
+            std::lock_guard<std::mutex> lock(mutex);
+            queue.push_back(std::move(fn));
+        });
+        TestListener listener;
+        runner->SetListener(&listener);
+        ChatTurn turn;
+        turn.provider = MockProvider(base, "openrouter", "/openai");
+        turn.request.model = "mock-model";
+        Message user;
+        user.role = Role::User;
+        user.content = "What is on my screen?";
+        turn.request.messages.push_back(user);
+        turn.computer = true;
+        turn.vision = true;
+        turn.toolContext.commandApproval = "ask";
+        runner->Start(turn);
+        for (int i = 0; i < 3000 && !listener.finished; i++) {
+            std::deque<std::function<void()>> work;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                work.swap(queue);
+            }
+            for (auto& fn : work) fn();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        runner->SetListener(nullptr);
+        if (!listener.error.empty()) std::cerr << "    computer use error: " << listener.error << "\n";
+        CHECK(listener.outcome == ChatListener::Outcome::Done);
+        CHECK_EQ(listener.messages.size(), size_t{3});
+        if (listener.messages.size() == 3) {
+            CHECK_EQ(listener.messages[0].toolCalls[0].name, std::string("look"));
+            CHECK_EQ(listener.messages[1].images.size(), size_t{1});
+            CHECK(listener.messages[1].content.find("Window:") != std::string::npos);
+            CHECK_EQ(listener.messages[2].content, std::string("I see the image."));
+            std::cout << "  computer use turn: " << listener.messages[1].reasoning << "\n";
+        }
+        CHECK(listener.approvals.empty());  // looking never asks
+    }
+#endif
+    // Only the latest screenshots are sent.
+    std::vector<Message> history(4);
+    for (auto& m : history) m.images.push_back({"image/jpeg", "x"});
+    LimitImages(history, 2);
+    CHECK(history[0].images.empty() && history[1].images.empty());
+    CHECK(!history[2].images.empty() && !history[3].images.empty());
+    CHECK(history[0].content.find("left out") != std::string::npos);
+}
+
+#ifdef _WIN32
+#include <windows.h>
+
+// The desktop layer against a small window of our own, through accessibility
+// only (no keystrokes or clicks reach the real desktop).
+static std::atomic<bool> g_buttonPressed{false};
+
+static LRESULT CALLBACK TestWindowProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+    if (msg == WM_COMMAND && LOWORD(w) == 101 && HIWORD(w) == BN_CLICKED) g_buttonPressed = true;
+    if (msg == WM_DESTROY) PostQuitMessage(0);
+    return DefWindowProcW(h, msg, w, l);
+}
+
+static void TestDesktop() {
+    std::cout << "Desktop (computer use):\n";
+    std::atomic<HWND> window{nullptr};
+    std::atomic<HWND> edit{nullptr};
+    std::thread ui([&]() {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = TestWindowProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"FastChatTestWindow";
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        RegisterClassW(&wc);
+        HWND h = CreateWindowExW(WS_EX_NOACTIVATE, wc.lpszClassName, L"FastChat test window", WS_OVERLAPPEDWINDOW, 0, 0,
+                                 360, 160, nullptr, nullptr, wc.hInstance, nullptr);
+        HWND e = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER, 10, 10, 200, 24, h,
+                                 reinterpret_cast<HMENU>(100), wc.hInstance, nullptr);
+        CreateWindowExW(0, L"BUTTON", L"Press me", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 10, 50, 100, 30, h,
+                        reinterpret_cast<HMENU>(101), wc.hInstance, nullptr);
+        ShowWindow(h, SW_SHOWNOACTIVATE);
+        edit = e;
+        window = h;
+        MSG msg;
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    });
+    while (!window) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    {
+        auto desktop = Desktop::Create();
+        CHECK(desktop != nullptr);
+        desktop->SetTargetHandle(window.load());
+        std::string tree = desktop->Tree(200);
+        CHECK(tree.find("FastChat test window") != std::string::npos);
+        // Find the numbers of the edit and the button.
+        int editId = 0, buttonId = 0;
+        for (const auto& line : SplitLines(tree)) {
+            size_t open = line.find('['), close = line.find(']');
+            if (open == std::string::npos || close == std::string::npos) continue;
+            int id = std::stoi(line.substr(open + 1, close - open - 1));
+            if (line.find("] edit") != std::string::npos && !editId) editId = id;
+            if (line.find("button \"Press me\"") != std::string::npos) buttonId = id;
+        }
+        CHECK(editId > 0);
+        CHECK(buttonId > 0);
+        std::string message;
+        CHECK(desktop->SetText(editId, "hello from FastChat", message));
+        wchar_t text[64] = L"";
+        GetWindowTextW(edit.load(), text, 64);
+        CHECK(std::wstring(text) == L"hello from FastChat");
+        CHECK(desktop->Invoke(buttonId, message));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(g_buttonPressed.load());
+        CHECK_EQ(desktop->ElementDescription(buttonId), std::string("Press me button"));
+        int x = 0, y = 0;
+        CHECK(desktop->ElementPoint(buttonId, x, y));
+        Screenshot shot;
+        std::string error;
+        CHECK(desktop->Capture(shot, error));
+        CHECK(shot.width > 0 && shot.width <= 1280 && shot.height <= 800);
+        std::string jpeg = Base64Decode(shot.base64);
+        CHECK(jpeg.size() > 1000 && static_cast<unsigned char>(jpeg[0]) == 0xFF && static_cast<unsigned char>(jpeg[1]) == 0xD8);
+        std::cout << "  tree: " << SplitLines(tree).size() << " lines; screenshot " << shot.width << " x " << shot.height << ", "
+                  << FormatBytes(jpeg.size()) << "\n";
+
+        // The tools: looking is free; acting asks, and a "no" stops it.
+        ComputerContext ctx;
+        ctx.desktop = desktop.get();
+        ctx.vision = true;
+        std::vector<std::string> asked;
+        bool allow = false;
+        ctx.approve = [&](const std::string& what) {
+            asked.push_back(what);
+            return allow;
+        };
+        ToolOutcome look = RunComputerTool({"1", "look", "{}"}, ctx);
+        CHECK(!look.error);
+        CHECK_EQ(look.images.size(), size_t{1});
+        CHECK(asked.empty());
+        g_buttonPressed = false;
+        ToolOutcome no = RunComputerTool({"2", "invoke", JsonDump({{"element", buttonId}})}, ctx);
+        CHECK(no.error);
+        CHECK(!g_buttonPressed.load());
+        CHECK_EQ(asked.size(), size_t{1});
+        if (!asked.empty()) CHECK_EQ(asked[0], std::string("Press Press me button"));
+        allow = true;
+        ToolOutcome yes = RunComputerTool({"3", "invoke", JsonDump({{"element", buttonId}})}, ctx);
+        CHECK(!yes.error);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(g_buttonPressed.load());
+        ctx.approval = "deny";
+        ToolOutcome denied = RunComputerTool({"4", "set_text", JsonDump({{"element", editId}, {"text", "x"}})}, ctx);
+        CHECK(denied.error);
+        CHECK(IsComputerTool("press_keys") && !IsComputerTool("read_file"));
+
+        // Real keystrokes, only when asked: they take the foreground for a moment.
+        // The desktop refuses to type unless the test window is really in front.
+        if (const char* input = std::getenv("FASTCHAT_TEST_INPUT"); input && *input) {
+            std::string msg;
+            desktop->SetText(editId, "", msg);
+            desktop->FocusElement(editId, msg);
+            if (desktop->TypeText("abc", msg)) {
+                CHECK(desktop->PressKeys("shift+home", msg));
+                CHECK(desktop->TypeText("Hi there", msg));
+                CHECK(desktop->PressKeys("ctrl+a ctrl+c", msg));
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                wchar_t typed[64] = L"";
+                GetWindowTextW(edit.load(), typed, 64);
+                CHECK(std::wstring(typed) == L"Hi there");
+                g_buttonPressed = false;
+                int bx = 0, by = 0;
+                desktop->ElementPoint(buttonId, bx, by);
+                CHECK(desktop->Click(bx, by, "left", 1, msg));
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                CHECK(g_buttonPressed.load());
+                std::cout << "  keyboard and mouse: typed, selected, clicked\n";
+            } else {
+                std::cout << "  keyboard and mouse: skipped (" << msg << ")\n";
+            }
+        }
+    }
+    PostMessageW(window.load(), WM_CLOSE, 0, 0);
+    ui.join();
+}
+#endif
+
 int main() {
     std::string dir = PathToUtf8(fs::temp_directory_path() / ("fastchat-test-" + NewId().substr(0, 8)));
     fs::create_directories(PathFromUtf8(dir));
@@ -486,6 +715,10 @@ int main() {
 
     std::cout << "Coding agents (fake Claude Code and Codex):\n";
     TestAgents(JoinPath(dir, "project"));
+
+#ifdef _WIN32
+    TestDesktop();
+#endif
 
     // The real Claude Code, when asked for (it uses the account it is logged in with).
     if (const char* real = std::getenv("FASTCHAT_REAL_CLAUDE"); real && *real) {
@@ -525,6 +758,7 @@ int main() {
         TestProvider(mock, "anthropic", "/anthropic", "claude-opus-5-5", root);
         TestProvider(mock, "gemini", "/gemini", "gemini-mock", root);
         TestProvider(mock, "ollama", "/ollama", "mock:latest", root);
+        TestImageRequests(mock);
 
         // OpenRouter's account details
         auto p = CreateProvider(MockProvider(mock, "openrouter", "/openai"));

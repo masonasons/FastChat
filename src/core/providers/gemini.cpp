@@ -51,9 +51,12 @@ json BuildContents(const ChatRequest& request) {
     for (const auto& m : request.messages) {
         switch (m.role) {
             case Role::System:
-            case Role::User:
-                append("user", json::array({{{"text", m.role == Role::System ? "[System] " + m.content : m.content}}}));
+            case Role::User: {
+                json parts = json::array({{{"text", m.role == Role::System ? "[System] " + m.content : m.content}}});
+                for (const auto& img : m.images) parts.push_back({{"inlineData", {{"mimeType", img.mediaType}, {"data", img.base64}}}});
+                append("user", parts);
                 break;
+            }
             case Role::Assistant: {
                 if (auto pd = m.providerData.find("gemini"); pd != m.providerData.end() && pd->is_object()) {
                     if (auto parts = pd->find("parts"); parts != pd->end() && parts->is_array() && !parts->empty()) {
@@ -75,7 +78,9 @@ json BuildContents(const ChatRequest& request) {
                 if (m.toolError) response = {{"error", m.content}};
                 json fr = {{"name", m.toolName}, {"response", response}};
                 if (!m.toolCallId.empty() && !StartsWith(m.toolCallId, "gemini_")) fr["id"] = m.toolCallId;
-                append("user", json::array({{{"functionResponse", fr}}}));
+                json parts = json::array({{{"functionResponse", fr}}});
+                for (const auto& img : m.images) parts.push_back({{"inlineData", {{"mimeType", img.mediaType}, {"data", img.base64}}}});
+                append("user", parts);
                 break;
             }
         }

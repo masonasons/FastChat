@@ -78,6 +78,13 @@ private:
         m_approval->SetSelection(g.commandApproval == "auto" ? 1 : g.commandApproval == "deny" ? 2 : 0);
         s->Add(LabeledRow(panel, "Commands in code conversations:", m_approval, 0), 0, wxALL, 6);
 
+        m_computerApproval = new wxChoice(panel, wxID_ANY);
+        m_computerApproval->Append("Ask before each action");
+        m_computerApproval->Append("Act without asking");
+        m_computerApproval->Append("Only look, never act");
+        m_computerApproval->SetSelection(g.computerApproval == "auto" ? 1 : g.computerApproval == "deny" ? 2 : 0);
+        s->Add(LabeledRow(panel, "Actions in computer use conversations:", m_computerApproval, 0), 0, wxALL, 6);
+
         m_maxSteps = new wxSpinCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 1000, g.maxToolSteps);
         s->Add(LabeledRow(panel, "Most tool &steps per message:", m_maxSteps, 0), 0, wxALL, 6);
         m_timeout = new wxSpinCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 5, 7200, g.commandTimeoutSec);
@@ -395,6 +402,7 @@ private:
         g.chatSystemPrompt = S(m_chatPrompt->GetValue());
         g.codeSystemPrompt = S(m_codePrompt->GetValue());
         g.commandApproval = m_approval->GetSelection() == 1 ? "auto" : m_approval->GetSelection() == 2 ? "deny" : "ask";
+        g.computerApproval = m_computerApproval->GetSelection() == 1 ? "auto" : m_computerApproval->GetSelection() == 2 ? "deny" : "ask";
         g.maxToolSteps = m_maxSteps->GetValue();
         g.commandTimeoutSec = m_timeout->GetValue();
         if (!m_work.FindProvider(g.defaultProviderId)) {
@@ -425,6 +433,7 @@ private:
     wxTextCtrl* m_chatPrompt;
     wxTextCtrl* m_codePrompt;
     wxChoice* m_approval;
+    wxChoice* m_computerApproval;
     wxSpinCtrl* m_maxSteps;
     wxSpinCtrl* m_timeout;
     wxStaticText* m_titleModelLabel;

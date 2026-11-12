@@ -41,6 +41,12 @@ struct Usage {
 json UsageToJson(const Usage& u);
 Usage UsageFromJson(const json& j);
 
+// An image in a message: a screenshot from computer use, or one the user sends.
+struct ImageData {
+    std::string mediaType;  // "image/jpeg", "image/png"
+    std::string base64;
+};
+
 struct Message {
     int64_t id = 0;
     int64_t conversationId = 0;
@@ -61,9 +67,11 @@ struct Message {
     // (Anthropic thinking blocks with signatures, Gemini thought signatures).
     // Keyed by provider kind; ignored by other providers.
     json providerData;
+    // Images that go with the text (tool results of computer use carry screenshots).
+    std::vector<ImageData> images;
 };
 
-enum class ConversationType { Chat, Code };
+enum class ConversationType { Chat, Code, Computer };
 
 // Per conversation speech and sound settings. Every field left empty follows
 // the global setting.
@@ -118,5 +126,8 @@ struct Conversation {
     int64_t totalOutputTokens = 0;
 };
 
-// "Chat" / "Code"
+// "Chat" / "Code" / "Computer use"
 const char* ConversationTypeName(ConversationType t);
+// Stored form: "chat", "code", "computer"
+const char* ConversationTypeKey(ConversationType t);
+ConversationType ConversationTypeFromKey(const std::string& key);

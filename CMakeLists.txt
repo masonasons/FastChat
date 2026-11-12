@@ -140,6 +140,7 @@ set(FASTCHAT_CORE_SOURCES
     src/core/conversation.cpp
     src/core/chat_engine.cpp
     src/core/code_tools.cpp
+    src/core/computer_tools.cpp
     src/core/events.cpp
     src/core/log.cpp
     src/core/notify.cpp
@@ -162,6 +163,7 @@ if(WIN32)
         src/core/platform/process_windows.cpp
         src/core/platform/speech_sapi.cpp
         src/core/platform/child_windows.cpp
+        src/core/platform/desktop_windows.cpp
     )
 else()
     list(APPEND FASTCHAT_CORE_SOURCES
@@ -170,6 +172,7 @@ else()
         src/core/platform/secrets_posix.cpp
         src/core/platform/process_posix.cpp
         src/core/platform/child_posix.cpp
+        src/core/platform/desktop_none.cpp
     )
 endif()
 
@@ -187,7 +190,8 @@ if(MSVC)
     target_compile_options(fastchat_core PRIVATE /W3)
 endif()
 if(WIN32)
-    target_link_libraries(fastchat_core PUBLIC winhttp crypt32 ole32 oleaut32 uuid sapi shlwapi shell32 user32 advapi32)
+    target_link_libraries(fastchat_core PUBLIC winhttp crypt32 ole32 oleaut32 uuid sapi shlwapi shell32 user32 advapi32
+        gdi32 dwmapi windowscodecs uiautomationcore)
 else()
     find_package(CURL REQUIRED)
     find_package(Threads REQUIRED)

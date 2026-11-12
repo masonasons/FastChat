@@ -46,6 +46,7 @@ enum {
 };
 
 const size_t kMaxRowChars = 8000;
+const int kStopHotkeyId = 0xB0F0;
 
 // Tools that run a shell command: FastChat's, and Claude Code's.
 bool IsCommandToolName(const std::string& name) {
@@ -103,6 +104,7 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
     Bind(wxEVT_CHAR_HOOK, &ConversationFrame::OnCharHook, this);
     Bind(wxEVT_CLOSE_WINDOW, &ConversationFrame::OnClose, this);
     Bind(wxEVT_TIMER, [this](wxTimerEvent&) { SetPendingRow(false); });
+    Bind(wxEVT_HOTKEY, [this](wxKeyEvent&) { Stop(); }, kStopHotkeyId);
 
     m_input->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
         int key = e.GetKeyCode();
@@ -223,6 +225,10 @@ wxString ConversationFrame::RowText(int index) const {
                 if (m.content.find("(The command was stopped after") != std::string::npos) text += ", timed out";
                 else if (m.content.find("(The command was stopped by the user.)") != std::string::npos) text += ", stopped";
                 else if (pos == std::string::npos && m.toolError) text += ": " + OneLine(m.content, 200);
+            } else if (IsComputerTool(m.toolName)) {
+                // Computer use: the action itself reads as the row ("Pressed Save button").
+                text = (m.reasoning.empty() ? m.toolName : m.reasoning) + (m.toolError ? " (failed)" : "");
+                if (!m.images.empty()) text += ", with a screenshot";
             } else {
                 text = "Tool: " + (m.reasoning.empty() ? m.toolName : m.reasoning) + (m.toolError ? " (failed)" : "");
             }
@@ -309,7 +315,11 @@ void ConversationFrame::RemovePendingRow() {
 
 void ConversationFrame::UpdateTitle() {
     std::string title = m_conv.title;
-    if (title.empty()) title = m_conv.type == ConversationType::Code ? "Untitled code conversation" : "Untitled chat";
+    if (title.empty()) {
+        title = m_conv.type == ConversationType::Code       ? "Untitled code conversation"
+                : m_conv.type == ConversationType::Computer ? "Untitled computer use"
+                                                            : "Untitled chat";
+    }
     SetTitle(U(title) + " - FastChat");
 }
 
@@ -509,6 +519,24 @@ bool ConversationFrame::StartTurn() {
     turn.maxSteps = g.maxToolSteps;
     turn.toolContext.root = m_conv.folder;
     turn.toolContext.commandApproval = m_conv.settings.commandApproval.empty() ? g.commandApproval : m_conv.settings.commandApproval;
+    if (m_conv.type == ConversationType::Computer) {
+        const ProviderKindInfo* kind = FindProviderKind(provider.kind);
+        if (kind && (kind->style == ApiStyle::ClaudeCode || kind->style == ApiStyle::Codex)) {
+            ShowError(this, "Computer use needs a model from an API provider (Anthropic, OpenAI, Gemini, OpenRouter...), "
+                            "not a coding agent. Choose another model with Ctrl+M.");
+            return false;
+        }
+        turn.computer = true;
+        // Screenshots go to models that can see them; the others work from the accessibility tree.
+        ModelInfo info;
+        AppProviderCache().FindModel(provider.id, model, info);
+        turn.vision = info.vision || provider.kind == "openai" || provider.kind == "anthropic" ||
+                      provider.kind == "gemini" || provider.kind == "xai";
+        // The engine adds the computer use instructions; this is only the user's own.
+        turn.request.systemPrompt = m_conv.settings.systemPrompt.value_or(std::string());
+        turn.toolContext.commandApproval =
+            m_conv.settings.commandApproval.empty() ? g.computerApproval : m_conv.settings.commandApproval;
+    }
     if (m_autoApprove) turn.toolContext.commandApproval = "auto";
     turn.toolContext.commandTimeoutMs = static_cast<unsigned>(g.commandTimeoutSec) * 1000;
 
@@ -525,13 +553,27 @@ bool ConversationFrame::StartTurn() {
     SetPendingRow(true);
     m_timer.Start(700);
     m_send->SetLabel("&Send");
+    bool computer = turn.computer;
     if (!m_runner->Start(std::move(turn))) {
         m_running = false;
         m_timer.Stop();
         RemovePendingRow();
         return false;
     }
+    if (computer) {
+        // Focus will be in other windows, out of Escape's reach: a key that works anywhere.
+        m_stopHotkey = RegisterHotKey(kStopHotkeyId, wxMOD_CONTROL | wxMOD_ALT, WXK_ESCAPE);
+        SetStatus(m_stopHotkey ? wxString("Working on your computer. Ctrl+Alt+Escape stops it from any window.")
+                               : wxString("Working on your computer. Escape here stops it."));
+    }
     return true;
+}
+
+void ConversationFrame::ReleaseStopHotkey() {
+    if (m_stopHotkey) {
+        UnregisterHotKey(kStopHotkeyId);
+        m_stopHotkey = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -694,6 +736,7 @@ void ConversationFrame::OnApproveCommand(const std::string& what, bool isCommand
 
 void ConversationFrame::OnFinished(Outcome outcome, const std::string& error) {
     m_running = false;
+    ReleaseStopHotkey();
     m_runningTool.clear();
     m_timer.Stop();
     RemovePendingRow();
@@ -954,6 +997,7 @@ void ConversationFrame::ViewMessage(int index) {
                 title = "Tool: " + U(m.toolName);
                 text = m.reasoning + "\n\n" + m.content;
             }
+            if (!m.images.empty()) text += "\n\n(A screenshot went to the model with this result.)";
             break;
         }
     }
@@ -1250,6 +1294,7 @@ void ConversationFrame::SettingsChanged() {
 }
 
 void ConversationFrame::CloseSilently() {
+    ReleaseStopHotkey();
     m_silentClose = true;
     m_runner->SetListener(nullptr);
     m_runner->Stop();
@@ -1266,6 +1311,7 @@ void ConversationFrame::OnClose(wxCloseEvent& e) {
     m_runner->SetListener(nullptr);
     m_runner->Stop();
     m_timer.Stop();
+    ReleaseStopHotkey();
     if (!IsMaximized() && !IsIconized()) {
         AppSettings().windowState["conversation"] = {{"w", GetSize().x}, {"h", GetSize().y}};
     }

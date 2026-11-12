@@ -30,10 +30,26 @@ private:
 json BuildMessages(const ChatRequest& request) {
     json messages = json::array();
     if (!request.systemPrompt.empty()) messages.push_back({{"role", "system"}, {"content", request.systemPrompt}});
+    json pendingImages = json::array();  // screenshots from tool results, sent after them
+    auto flushImages = [&]() {
+        if (pendingImages.empty()) return;
+        messages.push_back({{"role", "user"}, {"content", "Screenshot from the tool results above."}, {"images", pendingImages}});
+        pendingImages = json::array();
+    };
     for (const auto& m : request.messages) {
+        if (m.role != Role::Tool) flushImages();
         switch (m.role) {
             case Role::System: messages.push_back({{"role", "system"}, {"content", m.content}}); break;
-            case Role::User: messages.push_back({{"role", "user"}, {"content", m.content}}); break;
+            case Role::User: {
+                json msg = {{"role", "user"}, {"content", m.content}};
+                if (!m.images.empty()) {
+                    json images = json::array();
+                    for (const auto& img : m.images) images.push_back(img.base64);
+                    msg["images"] = images;
+                }
+                messages.push_back(msg);
+                break;
+            }
             case Role::Assistant: {
                 json msg = {{"role", "assistant"}, {"content", m.content}};
                 if (!m.reasoning.empty() && !m.toolCalls.empty()) msg["thinking"] = m.reasoning;
@@ -49,9 +65,11 @@ json BuildMessages(const ChatRequest& request) {
             }
             case Role::Tool:
                 messages.push_back({{"role", "tool"}, {"content", m.content}, {"tool_name", m.toolName}});
+                for (const auto& img : m.images) pendingImages.push_back(img.base64);
                 break;
         }
     }
+    flushImages();
     return messages;
 }
 

@@ -87,6 +87,7 @@ private:
     void Export();
     void ClearMessages();
     void Stop();
+    void ReleaseStopHotkey();
     void SpeakLastResponse();
     void CopyLastResponse();
 
@@ -122,6 +123,7 @@ private:
     std::string m_statusText;
     int64_t m_turnStartMs = 0;
     bool m_autoApprove = false;
+    bool m_stopHotkey = false;
     bool m_silentClose = false;
     int64_t m_lastCreditsCheck = 0;
 };

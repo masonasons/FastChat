@@ -34,6 +34,38 @@ def has_tool_result(body, style):
     return False
 
 
+def image_placed_right(body, style):
+    """Whether a screenshot from a tool result arrived where that API wants it."""
+    if style == "openai" or style == "ollama":
+        msgs = body.get("messages", [])
+        tool_idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
+        for i, m in enumerate(msgs):
+            if m.get("role") != "user":
+                continue
+            has = bool(m.get("images")) if style == "ollama" else (
+                isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m["content"]))
+            if has and tool_idx and i > max(tool_idx):
+                return True
+        return False
+    if style == "anthropic":
+        for m in body.get("messages", []):
+            for b in m.get("content", []) if isinstance(m.get("content"), list) else []:
+                if b.get("type") == "tool_result" and isinstance(b.get("content"), list):
+                    if any(c.get("type") == "image" for c in b["content"]):
+                        return True
+        return False
+    if style == "gemini":
+        for c in body.get("contents", []):
+            parts = c.get("parts", [])
+            if any("functionResponse" in p for p in parts) and any("inlineData" in p for p in parts):
+                return True
+        return False
+    return False
+
+
+SEEN = ["I", " see", " the", " image."]
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -116,14 +148,20 @@ class Handler(BaseHTTPRequestHandler):
                 c["usage"] = usage
             events.append("data: " + json.dumps(c) + "\n\n")
         chunk({"reasoning": "Let me think."})
-        if body.get("tools") and not has_tool_result(body, "openai"):
+        tool_names = [t["function"]["name"] for t in body.get("tools", [])]
+        if "look" in tool_names and not has_tool_result(body, "openai"):
+            # Computer use: look at the screen.
+            chunk({"tool_calls": [{"index": 0, "id": "call_look", "type": "function",
+                                   "function": {"name": "look", "arguments": "{}"}}]})
+            chunk({}, "tool_calls")
+        elif body.get("tools") and not has_tool_result(body, "openai"):
             chunk({"tool_calls": [{"index": 0, "id": "call_1", "type": "function",
                                    "function": {"name": "list_directory", "arguments": ""}}]})
             chunk({"tool_calls": [{"index": 0, "function": {"arguments": "{\"path\":"}}]})
             chunk({"tool_calls": [{"index": 0, "function": {"arguments": " \".\"}"}}]})
             chunk({}, "tool_calls")
         else:
-            for t in TEXT:
+            for t in (SEEN if image_placed_right(body, "openai") else TEXT):
                 chunk({"content": t})
             chunk({}, "stop")
         chunk({}, usage={"prompt_tokens": 100, "completion_tokens": 20,
@@ -152,11 +190,11 @@ class Handler(BaseHTTPRequestHandler):
             stop = "tool_use"
         else:
             # The thinking block must come back unchanged in the tool loop.
-            if has_tool_result(body, "anthropic"):
+            if has_tool_result(body, "anthropic") and not image_placed_right(body, "anthropic"):
                 assistant = [m for m in body["messages"] if m["role"] == "assistant"][-1]
                 assert assistant["content"][0]["signature"] == "sig123", assistant
             e("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}})
-            for t in TEXT:
+            for t in (SEEN if image_placed_right(body, "anthropic") else TEXT):
                 e("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": t}})
             e("content_block_stop", {"type": "content_block_stop", "index": 1})
             stop = "end_turn"
@@ -177,10 +215,10 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("tools") and not has_tool_result(body, "gemini"):
             chunk([{"functionCall": {"name": "list_directory", "args": {"path": "."}}, "thoughtSignature": "gsig"}], "STOP")
         else:
-            if has_tool_result(body, "gemini"):
+            if has_tool_result(body, "gemini") and not image_placed_right(body, "gemini"):
                 model_turn = [c for c in body["contents"] if c["role"] == "model"][-1]
                 assert any(p.get("thoughtSignature") == "gsig" for p in model_turn["parts"]), model_turn
-            for t in TEXT:
+            for t in (SEEN if image_placed_right(body, "gemini") else TEXT):
                 chunk([{"text": t}])
             chunk([{"text": ""}], "STOP", {"promptTokenCount": 50, "candidatesTokenCount": 10, "thoughtsTokenCount": 5})
         self.send_sse(ev)
@@ -191,7 +229,7 @@ class Handler(BaseHTTPRequestHandler):
             lines.append({"model": body["model"], "message": {"role": "assistant", "content": "",
                           "tool_calls": [{"function": {"name": "list_directory", "arguments": {"path": "."}}}]}, "done": False})
         else:
-            for t in TEXT:
+            for t in (SEEN if image_placed_right(body, "ollama") else TEXT):
                 lines.append({"model": body["model"], "message": {"role": "assistant", "content": t}, "done": False})
         lines.append({"model": body["model"], "message": {"role": "assistant", "content": ""}, "done": True,
                       "done_reason": "stop", "prompt_eval_count": 30, "eval_count": 12})

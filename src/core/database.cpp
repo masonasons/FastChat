@@ -47,6 +47,21 @@ std::string ToolCallsToText(const std::vector<ToolCall>& calls) {
     return JsonDump(arr);
 }
 
+std::string ImagesToText(const std::vector<ImageData>& images) {
+    if (images.empty()) return std::string();
+    json arr = json::array();
+    for (const auto& i : images) arr.push_back({{"type", i.mediaType}, {"data", i.base64}});
+    return JsonDump(arr);
+}
+
+std::vector<ImageData> ImagesFromText(const std::string& text) {
+    std::vector<ImageData> images;
+    json arr = ParseJson(text);
+    if (!arr.is_array()) return images;
+    for (const auto& i : arr) images.push_back({i.value("type", std::string()), i.value("data", std::string())});
+    return images;
+}
+
 std::vector<ToolCall> ToolCallsFromText(const std::string& text) {
     std::vector<ToolCall> calls;
     json arr = ParseJson(text);
@@ -84,7 +99,8 @@ CREATE TABLE IF NOT EXISTS messages (
     created INTEGER NOT NULL,
     duration_ms INTEGER NOT NULL DEFAULT 0,
     stop_reason TEXT NOT NULL DEFAULT '',
-    provider_data TEXT NOT NULL DEFAULT ''
+    provider_data TEXT NOT NULL DEFAULT '',
+    images TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, id);
 )SQL";
@@ -106,7 +122,12 @@ bool Database::Open(const std::string& path) {
     sqlite3_busy_timeout(m_db, 3000);
     Exec("PRAGMA journal_mode=WAL;");
     Exec("PRAGMA foreign_keys=ON;");
-    return Exec(kSchema);
+    if (!Exec(kSchema)) return false;
+    // Databases from before images: add the column (fails harmlessly when present).
+    char* err = nullptr;
+    sqlite3_exec(m_db, "ALTER TABLE messages ADD COLUMN images TEXT NOT NULL DEFAULT ''", nullptr, nullptr, &err);
+    sqlite3_free(err);
+    return true;
 }
 
 void Database::Close() {
@@ -131,7 +152,7 @@ static Conversation ReadConversation(Stmt& s) {
     Conversation c;
     c.id = s.Int(0);
     c.title = s.Text(1);
-    c.type = s.Text(2) == "code" ? ConversationType::Code : ConversationType::Chat;
+    c.type = ConversationTypeFromKey(s.Text(2));
     c.folder = s.Text(3);
     c.createdAt = s.Int(4);
     c.updatedAt = s.Int(5);
@@ -179,7 +200,7 @@ bool Database::CreateConversation(Conversation& c) {
     Stmt s(m_db, "INSERT INTO conversations (title, type, folder, created, updated, pinned, settings) "
                  "VALUES (?, ?, ?, ?, ?, ?, ?)");
     s.Bind(1, c.title)
-        .Bind(2, std::string(c.type == ConversationType::Code ? "code" : "chat"))
+        .Bind(2, std::string(ConversationTypeKey(c.type)))
         .Bind(3, c.folder)
         .Bind(4, c.createdAt)
         .Bind(5, c.updatedAt)
@@ -201,7 +222,7 @@ bool Database::UpdateConversation(const Conversation& c) {
         .Bind(2, c.folder)
         .Bind(3, static_cast<int64_t>(c.pinned))
         .Bind(4, JsonDump(ConversationSettingsToJson(c.settings)))
-        .Bind(5, std::string(c.type == ConversationType::Code ? "code" : "chat"))
+        .Bind(5, std::string(ConversationTypeKey(c.type)))
         .Bind(6, c.id);
     return s.Run();
 }
@@ -230,7 +251,7 @@ std::vector<Message> Database::LoadMessages(int64_t conversationId) {
     std::vector<Message> list;
     if (!m_db) return list;
     Stmt s(m_db, "SELECT id, role, content, reasoning, tool_calls, tool_call_id, tool_name, tool_error, provider_id, "
-                 "model, usage, created, duration_ms, stop_reason, provider_data FROM messages "
+                 "model, usage, created, duration_ms, stop_reason, provider_data, images FROM messages "
                  "WHERE conversation_id = ? ORDER BY id");
     s.Bind(1, conversationId);
     while (s.Step() == SQLITE_ROW) {
@@ -251,6 +272,7 @@ std::vector<Message> Database::LoadMessages(int64_t conversationId) {
         m.durationMs = s.Int(12);
         m.stopReason = s.Text(13);
         m.providerData = ParseJson(s.Text(14));
+        m.images = ImagesFromText(s.Text(15));
         list.push_back(std::move(m));
     }
     return list;
@@ -261,8 +283,8 @@ bool Database::AddMessage(Message& m) {
     if (!m_db) return false;
     if (!m.createdAt) m.createdAt = NowSeconds();
     Stmt s(m_db, "INSERT INTO messages (conversation_id, role, content, reasoning, tool_calls, tool_call_id, "
-                 "tool_name, tool_error, provider_id, model, usage, created, duration_ms, stop_reason, provider_data) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                 "tool_name, tool_error, provider_id, model, usage, created, duration_ms, stop_reason, provider_data, images) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     s.Bind(1, m.conversationId)
         .Bind(2, std::string(RoleKey(m.role)))
         .Bind(3, m.content)
@@ -277,7 +299,8 @@ bool Database::AddMessage(Message& m) {
         .Bind(12, m.createdAt)
         .Bind(13, m.durationMs)
         .Bind(14, m.stopReason)
-        .Bind(15, m.providerData.is_null() ? std::string() : JsonDump(m.providerData));
+        .Bind(15, m.providerData.is_null() ? std::string() : JsonDump(m.providerData))
+        .Bind(16, ImagesToText(m.images));
     if (!s.Run()) {
         m_error = sqlite3_errmsg(m_db);
         return false;

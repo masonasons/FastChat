@@ -18,7 +18,25 @@ Role RoleFromKey(const std::string& key) {
 }
 
 const char* ConversationTypeName(ConversationType t) {
-    return t == ConversationType::Code ? "Code" : "Chat";
+    switch (t) {
+        case ConversationType::Code: return "Code";
+        case ConversationType::Computer: return "Computer use";
+        default: return "Chat";
+    }
+}
+
+const char* ConversationTypeKey(ConversationType t) {
+    switch (t) {
+        case ConversationType::Code: return "code";
+        case ConversationType::Computer: return "computer";
+        default: return "chat";
+    }
+}
+
+ConversationType ConversationTypeFromKey(const std::string& key) {
+    if (key == "code") return ConversationType::Code;
+    if (key == "computer") return ConversationType::Computer;
+    return ConversationType::Chat;
 }
 
 json UsageToJson(const Usage& u) {

@@ -76,6 +76,16 @@ void ChatRunner::Run(ChatTurn turn) {
     });
 }
 
+void LimitImages(std::vector<Message>& messages, int keep) {
+    int seen = 0;
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        if (it->images.empty()) continue;
+        if (seen++ < keep) continue;
+        it->images.clear();
+        it->content += "\n(An earlier screenshot was here; it was left out to save space.)";
+    }
+}
+
 void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
     AgentTurn agent;
     agent.request = turn.request;
@@ -140,6 +150,28 @@ void ChatRunner::RunTurn(ChatTurn turn) {
     ModelInfo modelInfo;
     AppProviderCache().FindModel(turn.provider.id, turn.request.model, modelInfo);
 
+    // Computer use: the desktop lives on this thread for the whole turn.
+    std::unique_ptr<Desktop> desktop;
+    ComputerContext computer;
+    if (turn.computer) {
+        desktop = Desktop::Create();
+        if (!desktop) {
+            m_running = false;
+            Post([](ChatListener& l) {
+                l.OnFinished(ChatListener::Outcome::Failed, "Computer use works on Windows only, so far.");
+            });
+            return;
+        }
+        computer.desktop = desktop.get();
+        computer.vision = turn.vision;
+        computer.approval = turn.toolContext.commandApproval;
+        computer.cancel = &m_cancel;
+        computer.approve = [this](const std::string& what) { return AskApproval(what, false); };
+        turn.request.tools = ComputerToolDefinitions(turn.vision);
+        std::string extra = turn.request.systemPrompt;
+        turn.request.systemPrompt = ComputerSystemPrompt(turn.vision, desktop->ScreenDescription());
+        if (!Trim(extra).empty()) turn.request.systemPrompt += "\n" + extra;
+    }
     if (turn.tools) {
         turn.request.tools = CodeToolDefinitions();
         turn.toolContext.cancel = &m_cancel;
@@ -158,7 +190,10 @@ void ChatRunner::RunTurn(ChatTurn turn) {
 
     for (int step = 0; step < std::max(1, turn.maxSteps); step++) {
         auto started = std::chrono::steady_clock::now();
-        ChatResult result = provider->Chat(turn.request, callbacks, &m_cancel);
+        // Only the latest screenshots go along; older ones would fill the context.
+        ChatRequest sending = turn.request;
+        LimitImages(sending.messages, 2);
+        ChatResult result = provider->Chat(sending, callbacks, &m_cancel);
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
         AppProviderCache().SetRateLimits(turn.provider.id, result.rateLimits);
 
@@ -198,7 +233,7 @@ void ChatRunner::RunTurn(ChatTurn turn) {
         Post([reply](ChatListener& l) mutable { l.OnMessage(reply); });
         turn.request.messages.push_back(reply);
 
-        if (reply.toolCalls.empty() || !turn.tools) {
+        if (reply.toolCalls.empty() || !(turn.tools || turn.computer)) {
             if (result.stopReason == "max_tokens" || result.stopReason == "length" || result.stopReason == "MAX_TOKENS") {
                 finish(ChatListener::Outcome::Done, "The response was cut off at the output token limit.");
             } else {
@@ -211,13 +246,14 @@ void ChatRunner::RunTurn(ChatTurn turn) {
             if (m_cancel) break;
             std::string description = DescribeToolCall(call);
             Post([call, description](ChatListener& l) { l.OnToolRunning(call, description); });
-            ToolOutcome outcome = RunTool(call, turn.toolContext);
+            ToolOutcome outcome = turn.computer ? RunComputerTool(call, computer) : RunTool(call, turn.toolContext);
             Message toolMsg;
             toolMsg.role = Role::Tool;
             toolMsg.toolCallId = call.id;
             toolMsg.toolName = call.name;
             toolMsg.content = outcome.output;
             toolMsg.toolError = outcome.error;
+            toolMsg.images = outcome.images;
             toolMsg.reasoning = outcome.summary;  // the one-line summary, shown in the list
             toolMsg.providerId = turn.provider.id;
             toolMsg.createdAt = NowSeconds();
