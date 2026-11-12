@@ -3,6 +3,7 @@
 // A conversation's window: the messages, the box to write in, an Actions
 // button, and a status bar with the model, context size and cost.
 
+#include "core/attachments.h"
 #include "core/chat_engine.h"
 #include "core/conversation.h"
 #include "core/notify.h"
@@ -30,6 +31,8 @@ public:
     void ConversationUpdated(const Conversation& c);
     void SettingsChanged();
     void EditSettings();
+    // Attach these files to the next message (also what dropping files does).
+    void AttachPaths(const wxArrayString& paths);
 
     // ChatListener
     void OnReasoningDelta(const std::string& text) override;
@@ -68,6 +71,12 @@ private:
 
     void Send();
     bool StartTurn(bool compactOnly = false);
+    // Files to send with the next message (Attach files, pasting, dropping).
+    void ChooseAttachments();
+    void AddAttachment(const Attachment& a);
+    bool PasteAttachments();  // false: nothing on the clipboard to attach
+    void RemoveAttachment(int index);
+    void UpdateAttachments();
     void Compact();
     void ShowActivity();
     bool TakeBackQueued(int row);
@@ -128,7 +137,12 @@ private:
     int m_buffer = 0;
     std::vector<bool> m_beforeCompaction;  // per message, as of the last FillList
     wxTextCtrl* m_input;
+    wxStaticText* m_attachLabel = nullptr;
+    wxListBox* m_attachList = nullptr;
+    std::vector<Attachment> m_attachments;
+    int m_pasted = 0;  // pasted images so far, for their names
     wxButton* m_send;
+    wxButton* m_attach;
     wxButton* m_actions;
     wxTimer m_timer;
 

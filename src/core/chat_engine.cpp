@@ -80,9 +80,10 @@ void ChatRunner::Run(ChatTurn turn) {
 }
 
 void LimitImages(std::vector<Message>& messages, int keep) {
+    // Screenshots in tool results only: what the user attached always goes.
     int seen = 0;
     for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-        if (it->images.empty()) continue;
+        if (it->images.empty() || it->role != Role::Tool) continue;
         if (seen++ < keep) continue;
         it->images.clear();
         it->content += "\n(An earlier screenshot was here; it was left out to save space.)";

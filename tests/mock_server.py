@@ -64,7 +64,39 @@ def image_placed_right(body, style):
     return False
 
 
+def attachments_placed_right(body, style):
+    """Whether an image and a PDF the user attached arrived as that API takes them
+    (Ollama takes images only: the PDF is named in the text)."""
+    if style == "openai":
+        for m in body.get("messages", []):
+            parts = m.get("content") if m.get("role") == "user" and isinstance(m.get("content"), list) else []
+            image = any(p.get("type") == "image_url" and p["image_url"]["url"].startswith("data:image/png;base64,") for p in parts)
+            pdf = any(p.get("type") == "file" and p["file"].get("filename") == "report.pdf" and
+                      p["file"]["file_data"].startswith("data:application/pdf;base64,") for p in parts)
+            if image and pdf:
+                return True
+        return False
+    if style == "anthropic":
+        for m in body.get("messages", []):
+            blocks = m.get("content") if m.get("role") == "user" and isinstance(m.get("content"), list) else []
+            types = {(b.get("type"), b.get("source", {}).get("media_type")) for b in blocks}
+            if ("image", "image/png") in types and ("document", "application/pdf") in types:
+                return True
+        return False
+    if style == "gemini":
+        for c in body.get("contents", []):
+            mimes = {p["inlineData"]["mimeType"] for p in c.get("parts", []) if "inlineData" in p}
+            if c.get("role") == "user" and {"image/png", "application/pdf"} <= mimes:
+                return True
+        return False
+    if style == "ollama":
+        return any(m.get("role") == "user" and m.get("images") and "report.pdf" in m.get("content", "")
+                   for m in body.get("messages", []))
+    return False
+
+
 SEEN = ["I", " see", " the", " image."]
+ATTACHED = ["I", " see", " the", " attachments."]
 FLAKY = {"count": 0}
 
 
@@ -171,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
             chunk({"tool_calls": [{"index": 0, "function": {"arguments": " \".\"}"}}]})
             chunk({}, "tool_calls")
         else:
-            for t in (SEEN if image_placed_right(body, "openai") else TEXT):
+            for t in (ATTACHED if attachments_placed_right(body, "openai") else SEEN if image_placed_right(body, "openai") else TEXT):
                 chunk({"content": t})
             chunk({}, "stop")
         chunk({}, usage={"prompt_tokens": 100, "completion_tokens": 20,
@@ -204,7 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                 assistant = [m for m in body["messages"] if m["role"] == "assistant"][-1]
                 assert assistant["content"][0]["signature"] == "sig123", assistant
             e("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}})
-            for t in (SEEN if image_placed_right(body, "anthropic") else TEXT):
+            for t in (ATTACHED if attachments_placed_right(body, "anthropic") else SEEN if image_placed_right(body, "anthropic") else TEXT):
                 e("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": t}})
             e("content_block_stop", {"type": "content_block_stop", "index": 1})
             stop = "end_turn"
@@ -228,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
             if has_tool_result(body, "gemini") and not image_placed_right(body, "gemini"):
                 model_turn = [c for c in body["contents"] if c["role"] == "model"][-1]
                 assert any(p.get("thoughtSignature") == "gsig" for p in model_turn["parts"]), model_turn
-            for t in (SEEN if image_placed_right(body, "gemini") else TEXT):
+            for t in (ATTACHED if attachments_placed_right(body, "gemini") else SEEN if image_placed_right(body, "gemini") else TEXT):
                 chunk([{"text": t}])
             chunk([{"text": ""}], "STOP", {"promptTokenCount": 50, "candidatesTokenCount": 10, "thoughtsTokenCount": 5})
         self.send_sse(ev)
@@ -239,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
             lines.append({"model": body["model"], "message": {"role": "assistant", "content": "",
                           "tool_calls": [{"function": {"name": "list_directory", "arguments": {"path": "."}}}]}, "done": False})
         else:
-            for t in (SEEN if image_placed_right(body, "ollama") else TEXT):
+            for t in (ATTACHED if attachments_placed_right(body, "ollama") else SEEN if image_placed_right(body, "ollama") else TEXT):
                 lines.append({"model": body["model"], "message": {"role": "assistant", "content": t}, "done": False})
         lines.append({"model": body["model"], "message": {"role": "assistant", "content": ""}, "done": True,
                       "done_reason": "stop", "prompt_eval_count": 30, "eval_count": 12})

@@ -39,6 +39,17 @@ std::string AgentPrompt(const AgentTurn& turn) {
     return text + "My new message:\n\n" + latest;
 }
 
+std::vector<ImageData> AgentAttachments(const AgentTurn& turn) {
+    const auto& messages = turn.request.messages;
+    size_t firstNew = messages.size();
+    while (firstNew > 0 && messages[firstNew - 1].role == Role::User) firstNew--;
+    std::vector<ImageData> files;
+    for (size_t i = firstNew; i < messages.size(); i++) {
+        for (const auto& img : messages[i].images) files.push_back(img);
+    }
+    return files;
+}
+
 std::string AgentChatFolder() {
     std::string dir = JoinPath(GetDataDir(), "agent-chat");
     std::error_code ec;

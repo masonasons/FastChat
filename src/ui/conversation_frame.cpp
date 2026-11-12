@@ -8,7 +8,11 @@
 #include "core/speech.h"
 #include "core/util.h"
 
+#include <wx/clipbrd.h>
+#include <wx/dnd.h>
 #include <wx/filedlg.h>
+#include <wx/imagpng.h>
+#include <wx/mstream.h>
 #include <wx/richmsgdlg.h>
 
 namespace {
@@ -16,6 +20,7 @@ namespace {
 enum {
     ID_SEND = wxID_HIGHEST + 100,
     ID_ACTIONS,
+    ID_ATTACH,
     ID_STOP,
     ID_CHANGE_MODEL,
     ID_CHAT_SETTINGS,
@@ -80,6 +85,19 @@ bool IsCommandToolName(const std::string& name) {
     return name == "run_command" || name == "Bash" || name == "PowerShell";
 }
 
+// Files dropped on the conversation's window are attached to the next message.
+class AttachDropTarget : public wxFileDropTarget {
+public:
+    explicit AttachDropTarget(ConversationFrame* frame) : m_frame(frame) {}
+    bool OnDropFiles(wxCoord, wxCoord, const wxArrayString& files) override {
+        m_frame->AttachPaths(files);
+        return true;
+    }
+
+private:
+    ConversationFrame* m_frame;
+};
+
 // The summary a coding agent wrote when it compacted, if this is its note.
 std::string AgentSummary(const Message& m) {
     if (!IsAgentCompactionNote(m)) return std::string();
@@ -103,10 +121,19 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
     sizer->Add(new wxStaticText(m_panel, wxID_ANY, "&Write a message"), 0, wxLEFT | wxRIGHT, 6);
     m_input = new wxTextCtrl(m_panel, wxID_ANY, "", wxDefaultPosition, wxSize(-1, 90), wxTE_MULTILINE);
     sizer->Add(m_input, 1, wxEXPAND | wxALL, 6);
+    // Files waiting to go with the next message; shown only when there are some.
+    m_attachLabel = new wxStaticText(m_panel, wxID_ANY, "Attachme&nts");
+    sizer->Add(m_attachLabel, 0, wxLEFT | wxRIGHT, 6);
+    m_attachList = new wxListBox(m_panel, wxID_ANY, wxDefaultPosition, wxSize(-1, 60), 0, nullptr, wxLB_SINGLE | wxLB_NEEDED_SB);
+    sizer->Add(m_attachList, 0, wxEXPAND | wxALL, 6);
+    m_attachLabel->Hide();
+    m_attachList->Hide();
     auto* buttons = new wxBoxSizer(wxHORIZONTAL);
     m_send = new wxButton(m_panel, ID_SEND, "&Send");
+    m_attach = new wxButton(m_panel, ID_ATTACH, "Atta&ch files...");
     m_actions = new wxButton(m_panel, ID_ACTIONS, "&Actions");
     buttons->Add(m_send, 0, wxRIGHT, 6);
+    buttons->Add(m_attach, 0, wxRIGHT, 6);
     buttons->Add(m_actions, 0);
     sizer->Add(buttons, 0, wxALL, 6);
     m_panel->SetSizer(sizer);
@@ -131,11 +158,24 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
         {wxACCEL_NORMAL, WXK_F6, ID_FOCUS_LIST},
         {wxACCEL_CTRL, 'K', ID_COMPACT},
         {wxACCEL_CTRL, 'T', ID_ACTIVITY},
+        {wxACCEL_CTRL | wxACCEL_SHIFT, 'F', ID_ATTACH},
     };
     SetAcceleratorTable(wxAcceleratorTable(static_cast<int>(sizeof(accel) / sizeof(accel[0])), accel));
 
     Bind(wxEVT_MENU, &ConversationFrame::OnCommand, this);
     Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { Send(); }, ID_SEND);
+    Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ChooseAttachments(); }, ID_ATTACH);
+    // Files dropped on the window are attached.
+    for (wxWindow* w : std::initializer_list<wxWindow*>{m_panel, m_input, m_list, m_attachList}) {
+        w->SetDropTarget(new AttachDropTarget(this));
+    }
+    m_attachList->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
+        if (IsDeleteKey(e.GetKeyCode(), e.GetModifiers()) && m_attachList->GetSelection() >= 0) {
+            RemoveAttachment(m_attachList->GetSelection());
+            return;
+        }
+        e.Skip();
+    });
     Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ShowActions(); }, ID_ACTIONS);
     Bind(wxEVT_CHAR_HOOK, &ConversationFrame::OnCharHook, this);
     Bind(wxEVT_CLOSE_WINDOW, &ConversationFrame::OnClose, this);
@@ -144,6 +184,8 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
 
     m_input->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
         int key = e.GetKeyCode();
+        // Pasting an image or copied files attaches them; text pastes as text.
+        if (key == 'V' && e.GetModifiers() == wxMOD_CONTROL && PasteAttachments()) return;
         if (key == WXK_RETURN || key == WXK_NUMPAD_ENTER) {
             bool enterSends = AppSettings().general.enterSends;
             if (e.ControlDown() || (enterSends && !e.ShiftDown() && !e.AltDown())) {
@@ -295,10 +337,7 @@ wxString ConversationFrame::RowText(int index) const {
     std::string text;
     switch (m.role) {
         case Role::User:
-            text = "You: " + OneLine(m.content);
-            if (!m.images.empty()) {
-                text += m.images.size() == 1 ? std::string(", with an image") : ", with " + std::to_string(m.images.size()) + " images";
-            }
+            text = "You: " + OneLine(m.content) + AttachmentsSuffix(m);
             break;
         case Role::System:
             switch (GetNoteKind(m)) {
@@ -565,17 +604,20 @@ std::string ConversationFrame::SystemPrompt() const {
 
 void ConversationFrame::Send() {
     std::string text = Trim(S(m_input->GetValue()));
-    if (text.empty()) return;
+    if (text.empty() && m_attachments.empty()) return;
     if (m_running) {
         // Sent while it works: it goes to the model at its next step.
         Message queued;
         queued.role = Role::User;
         queued.conversationId = m_conv.id;
         queued.content = S(m_input->GetValue());
+        AttachToMessage(queued, m_attachments);
         m_runner->Enqueue(queued);
-        m_queued.push_back(queued.content);
-        if (QueuedShown()) m_list->Append(U("Queued: " + OneLine(queued.content, kMaxRowChars)));
+        m_queued.push_back(queued.content + AttachmentsSuffix(queued));
+        if (QueuedShown()) m_list->Append(U("Queued: " + OneLine(m_queued.back(), kMaxRowChars)));
         m_input->Clear();
+        m_attachments.clear();
+        UpdateAttachments();
         NotifyEvent(EventId::MessageSent, MakeContext(), &m_conv.settings);
         SetStatus("Queued: it goes to the model at its next step. Delete on it in the list takes it back.");
         return;
@@ -590,6 +632,7 @@ void ConversationFrame::Send() {
     m.role = Role::User;
     m.conversationId = m_conv.id;
     m.content = S(m_input->GetValue());
+    AttachToMessage(m, m_attachments);
     if (!AppDatabase().AddMessage(m)) {
         ShowError(this, "The message could not be saved: " + U(AppDatabase().LastError()));
         return;
@@ -597,9 +640,101 @@ void ConversationFrame::Send() {
     m_messages.push_back(m);
     AppendRow(static_cast<int>(m_messages.size()) - 1);
     m_input->Clear();
+    m_attachments.clear();
+    UpdateAttachments();
     NotifyEvent(EventId::MessageSent, MakeContext(), &m_conv.settings);
     StartTurn();
     m_main->ConversationChanged(m_conv.id);
+}
+
+void ConversationFrame::ChooseAttachments() {
+    wxFileDialog dlg(this, "Attach files", "", "",
+                     "Images, PDFs and text files|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.pdf;*.txt;*.md;*.csv;*.json;*.xml;*.log;"
+                     "*.py;*.c;*.cpp;*.h;*.js;*.ts;*.html;*.css|All files|*.*",
+                     wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
+    if (dlg.ShowModal() != wxID_OK) return;
+    wxArrayString paths;
+    dlg.GetPaths(paths);
+    AttachPaths(paths);
+    m_input->SetFocus();
+}
+
+void ConversationFrame::AttachPaths(const wxArrayString& paths) {
+    wxString problems;
+    for (const auto& path : paths) {
+        Attachment a;
+        std::string error;
+        if (LoadAttachment(S(path), a, error)) AddAttachment(a);
+        else problems += (problems.empty() ? "" : "\n") + U(error);
+    }
+    if (!problems.empty()) ShowError(this, problems, "Attach files");
+}
+
+void ConversationFrame::AddAttachment(const Attachment& a) {
+    m_attachments.push_back(a);
+    UpdateAttachments();
+    std::string said = "Attached " + a.name;
+    if (m_attachments.size() > 1) said += ", " + std::to_string(m_attachments.size()) + " attachments";
+    AppSpeech().Announce(said);
+    SetStatus(U(said));
+}
+
+// The clipboard's image, or files copied in a file manager.
+bool ConversationFrame::PasteAttachments() {
+    wxClipboardLocker lock;
+    if (!lock) return false;
+    if (wxTheClipboard->IsSupported(wxDF_FILENAME)) {
+        wxFileDataObject files;
+        if (wxTheClipboard->GetData(files) && !files.GetFilenames().empty()) {
+            AttachPaths(files.GetFilenames());
+            return true;
+        }
+    }
+    if (!wxTheClipboard->IsSupported(wxDF_BITMAP)) return false;
+    wxBitmapDataObject bitmap;
+    if (!wxTheClipboard->GetData(bitmap) || !bitmap.GetBitmap().IsOk()) return false;
+    if (!wxImage::FindHandler(wxBITMAP_TYPE_PNG)) wxImage::AddHandler(new wxPNGHandler);
+    wxImage image = bitmap.GetBitmap().ConvertToImage();
+    // As a PNG, made smaller until it is within what the services take.
+    std::string data;
+    for (int tries = 0; tries < 6; tries++) {
+        wxMemoryOutputStream out;
+        if (!image.SaveFile(out, wxBITMAP_TYPE_PNG)) break;
+        data.resize(out.GetSize());
+        out.CopyTo(data.data(), data.size());
+        if (data.size() <= kMaxImageBytes) break;
+        image.Rescale(image.GetWidth() * 3 / 4, image.GetHeight() * 3 / 4, wxIMAGE_QUALITY_HIGH);
+    }
+    Attachment a;
+    std::string error;
+    if (data.empty() || !MakeAttachment("Pasted image " + std::to_string(++m_pasted) + ".png", data, a, error)) {
+        ShowError(this, error.empty() ? wxString("The pasted image could not be attached.") : U(error), "Paste");
+        return true;
+    }
+    AddAttachment(a);
+    return true;
+}
+
+void ConversationFrame::RemoveAttachment(int index) {
+    if (index < 0 || index >= static_cast<int>(m_attachments.size())) return;
+    std::string name = m_attachments[index].name;
+    m_attachments.erase(m_attachments.begin() + index);
+    UpdateAttachments();
+    if (!m_attachments.empty()) m_attachList->SetSelection(std::min(index, static_cast<int>(m_attachments.size()) - 1));
+    else m_input->SetFocus();
+    AppSpeech().Announce("Removed " + name);
+}
+
+void ConversationFrame::UpdateAttachments() {
+    m_attachList->Clear();
+    for (const auto& a : m_attachments) m_attachList->Append(U(DescribeAttachment(a)));
+    bool any = !m_attachments.empty();
+    m_attachLabel->SetLabel(any ? wxString::Format("Attachme&nts (%d, Delete removes one)", static_cast<int>(m_attachments.size()))
+                                : wxString("Attachme&nts"));
+    if (any && m_attachList->GetSelection() < 0) m_attachList->SetSelection(0);
+    m_attachLabel->Show(any);
+    m_attachList->Show(any);
+    m_panel->Layout();
 }
 
 void ConversationFrame::Compact() {
@@ -1245,6 +1380,7 @@ void ConversationFrame::OnCommand(wxCommandEvent& e) {
             break;
         }
         case ID_CLOSE: Close(); break;
+        case ID_ATTACH: ChooseAttachments(); break;
         case ID_FOCUS_LIST:
             if (m_list->HasFocus()) m_input->SetFocus();
             else m_list->SetFocus();
@@ -1287,6 +1423,7 @@ void ConversationFrame::ShowActions() {
     menu.Append(ID_REGENERATE, "&Regenerate the last response\tCtrl+R");
     menu.Append(ID_COMPACT, "Com&pact the conversation\tCtrl+K");
     menu.Append(ID_ACTIVITY, "Running &tools and agents...\tCtrl+T");
+    menu.Append(ID_ATTACH, "Attac&h files...\tCtrl+Shift+F");
     auto* show = new wxMenu();
     for (int i = 0; i < BUF_COUNT; i++) {
         show->AppendRadioItem(ID_BUFFER_FIRST + i, kBuffers[i].name);
@@ -1348,8 +1485,8 @@ void ConversationFrame::ViewMessage(int index) {
             title = "Your message";
             text = m.content;
             if (!m.images.empty()) {
-                text += "\n\n(" + (m.images.size() == 1 ? std::string("An image goes") : std::to_string(m.images.size()) + " images go") +
-                        " to the model with this message.)";
+                std::string with = AttachmentsSuffix(m);  // ", with pic.png and a.pdf"
+                text += "\n\nAttached: " + with.substr(std::string(", with ").size()) + ".";
             }
             break;
         case Role::System:
@@ -1499,6 +1636,16 @@ void ConversationFrame::EditMessage(int index) {
     m_messages.erase(m_messages.begin() + index, m_messages.end());
     FillList(static_cast<int>(m_messages.size()) - 1);
     m_input->SetValue(U(m.content));
+    // Its images and PDFs come back as attachments.
+    m_attachments.clear();
+    for (const auto& img : m.images) {
+        Attachment a;
+        a.name = img.name.empty() ? (img.IsPdf() ? std::string("document.pdf") : std::string("image")) : img.name;
+        a.mediaType = img.mediaType;
+        a.data = Base64Decode(img.base64);
+        m_attachments.push_back(a);
+    }
+    UpdateAttachments();
     m_input->SetInsertionPointEnd();
     m_input->SetFocus();
     UpdateStatusBar();

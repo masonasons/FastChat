@@ -88,6 +88,19 @@ std::string FormatReset(int64_t when) {
     return when > 0 ? FormatRelativeTime(when) : std::string();
 }
 
+// A user message's content: its text alone, or with its images and PDFs
+// first as content blocks (as the Messages API takes them).
+json UserContent(const std::string& text, const std::vector<ImageData>& files) {
+    if (files.empty()) return text;
+    json content = json::array();
+    for (const auto& f : files) {
+        content.push_back({{"type", f.IsPdf() ? "document" : "image"},
+                           {"source", {{"type", "base64"}, {"media_type", f.mediaType}, {"data", f.base64}}}});
+    }
+    content.push_back({{"type", "text"}, {"text", text.empty() ? std::string(" ") : text}});
+    return content;
+}
+
 // After a compaction, Claude Code sends its summary as a user message that
 // starts like this, and carries on from it.
 bool IsCompactSummary(const std::string& text) {
@@ -222,13 +235,13 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
     // (--replay-user-messages) when it takes it in, during a turn or as a turn
     // of its own after the last one.
     std::set<std::string> waiting;
-    auto send = [&](const std::string& content) {
+    auto send = [&](const std::string& text, const std::vector<ImageData>& files) {
         std::string uuid = MessageUuid();
-        json msg = {{"type", "user"}, {"uuid", uuid}, {"message", {{"role", "user"}, {"content", content}}}};
+        json msg = {{"type", "user"}, {"uuid", uuid}, {"message", {{"role", "user"}, {"content", UserContent(text, files)}}}};
         child.Write(JsonDump(msg) + "\n");
         waiting.insert(uuid);
     };
-    send(AgentPrompt(turn));
+    send(AgentPrompt(turn), AgentAttachments(turn));
 
     std::string session = turn.resumeSession;
     Message pending;
@@ -300,7 +313,7 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         }
         if (stdinOpen && callbacks.takeQueued) {
             for (auto& m : callbacks.takeQueued()) {
-                send(m.content);
+                send(m.content, m.images);
                 if (callbacks.onQueuedDelivered) callbacks.onQueuedDelivered(m);
                 closeAt = {};
             }

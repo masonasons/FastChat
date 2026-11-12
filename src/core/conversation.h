@@ -41,10 +41,13 @@ struct Usage {
 json UsageToJson(const Usage& u);
 Usage UsageFromJson(const json& j);
 
-// An image in a message: a screenshot from computer use, or one the user sends.
+// A file that goes with a message as itself: a screenshot from computer use,
+// or an image or PDF the user attaches.
 struct ImageData {
-    std::string mediaType;  // "image/jpeg", "image/png"
+    std::string mediaType;  // "image/jpeg", "image/png", "application/pdf"
     std::string base64;
+    std::string name;       // the file's name, when it had one
+    bool IsPdf() const { return mediaType == "application/pdf"; }
 };
 
 struct Message {
@@ -67,7 +70,8 @@ struct Message {
     // (Anthropic thinking blocks with signatures, Gemini thought signatures).
     // Keyed by provider kind; ignored by other providers.
     json providerData;
-    // Images that go with the text (tool results of computer use carry screenshots).
+    // Images and PDFs that go with the text (attached by the user; computer use
+    // tool results carry screenshots).
     std::vector<ImageData> images;
 };
 

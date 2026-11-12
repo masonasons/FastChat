@@ -98,7 +98,8 @@ private:
 bool SummarizeConversation(Provider& provider, const std::string& model, const std::vector<Message>& messages,
                            int64_t through, const std::atomic<bool>* cancel, Message& summary, ChatResult& failure);
 
-// Keep the images of only the last `keep` messages that have any.
+// Keep the screenshots of only the last `keep` tool results that have any
+// (the user's own attachments all stay).
 void LimitImages(std::vector<Message>& messages, int keep);
 
 // Ask a model for a short title for a conversation (blocking; worker thread).

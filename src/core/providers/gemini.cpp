@@ -52,8 +52,11 @@ json BuildContents(const ChatRequest& request) {
         switch (m.role) {
             case Role::System:
             case Role::User: {
-                json parts = json::array({{{"text", m.role == Role::System ? "[System] " + m.content : m.content}}});
+                json parts = json::array();
+                // Images and PDFs (inline data, which Gemini takes as either); a
+                // message of attachments alone has no empty text part.
                 for (const auto& img : m.images) parts.push_back({{"inlineData", {{"mimeType", img.mediaType}, {"data", img.base64}}}});
+                if (!m.content.empty() || parts.empty()) parts.push_back({{"text", m.role == Role::System ? "[System] " + m.content : m.content}});
                 append("user", parts);
                 break;
             }

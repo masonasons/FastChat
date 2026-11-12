@@ -5,9 +5,11 @@
 // output and exit code, like FastChat's own.
 
 #include "core/providers/provider_impl.h"
+#include "core/platform.h"
 #include "core/util.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <map>
 #include <set>
 
@@ -130,6 +132,34 @@ ChatResult CodexProvider::RunAgent(const AgentTurn& turn, const AgentCallbacks& 
         argv.push_back("resume");
         argv.push_back(turn.resumeSession);
     }
+    // Attached images go as files (--image, for exec and exec resume alike);
+    // Codex reads no PDFs, so those are only named in the prompt.
+    struct RemoveFolder {
+        std::string path;
+        ~RemoveFolder() {
+            std::error_code ec;
+            if (!path.empty()) std::filesystem::remove_all(PathFromUtf8(path), ec);
+        }
+    } images;
+    std::string unsent;
+    int count = 0;
+    for (const auto& f : AgentAttachments(turn)) {
+        if (f.IsPdf()) {
+            unsent += "\n\n[" + (f.name.empty() ? std::string("A PDF") : f.name) + " was attached, but Codex cannot read PDFs.]";
+            continue;
+        }
+        if (images.path.empty()) {
+            images.path = JoinPath(JoinPath(GetDataDir(), "agent-images"), NewId());
+            std::error_code ec;
+            std::filesystem::create_directories(PathFromUtf8(images.path), ec);
+        }
+        std::string ext = f.mediaType == "image/png" ? ".png" : f.mediaType == "image/gif" ? ".gif" : f.mediaType == "image/webp" ? ".webp" : ".jpg";
+        std::string path = JoinPath(images.path, "image" + std::to_string(++count) + ext);
+        if (WriteFileText(path, Base64Decode(f.base64))) {
+            argv.push_back("--image");
+            argv.push_back(path);
+        }
+    }
     argv.push_back("-");  // the prompt comes on standard input
     std::vector<std::pair<std::string, std::string>> env;
     if (!m_config.apiKey.empty()) env.emplace_back("CODEX_API_KEY", m_config.apiKey);
@@ -140,7 +170,7 @@ ChatResult CodexProvider::RunAgent(const AgentTurn& turn, const AgentCallbacks& 
         result.error = error;
         return result;
     }
-    std::string prompt = AgentPrompt(turn);
+    std::string prompt = AgentPrompt(turn) + unsent;
     if (!Trim(req.systemPrompt).empty()) prompt = "Instructions: " + req.systemPrompt + "\n\n" + prompt;
     child.Write(prompt);
     child.CloseStdin();

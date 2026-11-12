@@ -15,6 +15,8 @@ std::unique_ptr<Provider> CreateCodexProvider(const ProviderConfig& config);
 // What to send as the user's message: the new message alone when resuming a
 // session, otherwise the conversation so far written out, then the new message.
 std::string AgentPrompt(const AgentTurn& turn);
+// The images and PDFs attached to the new message (the ones AgentPrompt sends).
+std::vector<ImageData> AgentAttachments(const AgentTurn& turn);
 // Where a chat (no project folder) runs: a folder of FastChat's own.
 std::string AgentChatFolder();
 // Run a program to the end and collect its output.

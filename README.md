@@ -104,6 +104,20 @@ providers, written in C++ with wxWidgets.
 - **Per-conversation settings** (Ctrl+Shift+Comma) override any of it: model,
   system prompt, reasoning effort, temperature, response length, command
   approval, speech, voice, rate, sound pack, and each event's sound and speech.
+- **Attachments**: images (PNG, JPEG, GIF, WebP, up to 5 MB), PDFs (up to 30
+  MB) and text files (up to 1 MB) go with a message: Attach files (Ctrl+Shift+F),
+  pasting a copied image or files with Ctrl+V, or dropping files on the window.
+  They wait in the Attachments list under the message box (Delete removes one).
+  Images and PDFs go to the model as themselves (OpenAI-style APIs, Anthropic,
+  Gemini; Ollama takes images only; Claude Code takes both; Codex takes images),
+  text files go into the message's text. Your messages' rows name what went
+  with them, and Edit and resend brings the attachments back.
+- **Importing conversations**: File > Import conversation (Ctrl+I) opens a
+  Basilisk conversation (.bskc) as a new chat: every exchange with its times
+  and models, the system prompt (earlier ones kept in notes where they
+  changed), temperature and response length, the model when you have a
+  provider of that kind, attachments and citations. A note at the top says
+  where it came from and anything that did not come over.
 
 ## Keys
 
@@ -117,6 +131,7 @@ Main window:
 | Delete | Delete |
 | Ctrl+P | Pin or unpin |
 | Ctrl+E | Export |
+| Ctrl+I | Import a conversation (Basilisk .bskc) |
 | Ctrl+F | Search |
 | Ctrl+Comma | Settings |
 | Ctrl+Shift+A | Account and credits |
@@ -132,6 +147,9 @@ Conversation window:
 | F6 | Move between the messages and the message box |
 | Alt+M / Alt+W | The messages / the message box |
 | Alt+A | Actions |
+| Ctrl+Shift+F / Alt+C | Attach files (images, PDFs, text files) |
+| Ctrl+V | In the message box: attach a copied image or copied files (text pastes as usual) |
+| Alt+N, then Delete | The attachments waiting to be sent; Delete removes one |
 | Ctrl+M | Change model |
 | Ctrl+Shift+Comma | Conversation settings |
 | Ctrl+R | Regenerate the last response |
@@ -274,7 +292,10 @@ src/core/            everything but the windows
   code_tools.*       the tools code conversations give the model
   notify.*, speech.*, sound.*, events.*   speech and sound events
   soundpack.*        sound packs: finding them, the sound for an event, and
-                     importing a pack's zip (with miniz)
+                     importing a pack's zip
+  attachments.*      files attached to a message: what they are, where they go
+  conversation_import.*   other apps' conversations (Basilisk)
+  zip.*              reading zips (miniz)
 src/ui/              the wxWidgets windows and dialogs
 tests/               core tests and the mock server
 ```

@@ -79,8 +79,24 @@ def next_message(timeout=None):
     return None if line is None else json.loads(line)
 
 
+def text_of(content):
+    """A user message's text: the string, or its text blocks (with images and documents first)."""
+    if isinstance(content, str):
+        return content
+    return "".join(b.get("text", "") for b in content if b.get("type") == "text")
+
+
+def files_of(content):
+    """The images and documents a user message carries: "image image/png", "document application/pdf"."""
+    if isinstance(content, str):
+        return []
+    return [b["type"] + " " + b["source"]["media_type"] for b in content
+            if b.get("type") in ("image", "document") and b.get("source", {}).get("type") == "base64" and b["source"].get("data")]
+
+
 first = next_message()
-prompt = first["message"]["content"]
+prompt = text_of(first["message"]["content"])
+attached = files_of(first["message"]["content"])
 out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku-5-5",
      "tools": [] if no_tools else ["Bash", "Write"], "cwd": "."})
 taken_in(first)
@@ -170,6 +186,11 @@ elif "run" in prompt and not no_tools:
     stream_text("It printed hi.")
     assistant("msg_2", {"type": "text", "text": "It printed hi."})
     result(0.0125)
+elif attached:
+    text = "Saw " + " and ".join(attached) + " with: " + prompt
+    stream_text(text)
+    assistant("msg_1", {"type": "text", "text": text})
+    result(0.0125)
 else:
     text = "Hello from fake Claude." + (" Resumed " + resume + "." if resume else "")
     stream_text(text)
@@ -185,7 +206,9 @@ while True:
     if msg.get("type") != "user":
         continue
     taken_in(msg)
-    text = "Got: " + msg["message"]["content"]
+    text = "Got: " + text_of(msg["message"]["content"])
+    if files_of(msg["message"]["content"]):
+        text += " with " + " and ".join(files_of(msg["message"]["content"]))
     if "write" in text and not no_tools:
         out({"type": "control_request", "request_id": "req-%d" % turn, "request": {"subtype": "can_use_tool",
              "tool_name": "Write", "input": {"file_path": "later.txt", "content": "x"}, "tool_use_id": "toolu_w%d" % turn}})

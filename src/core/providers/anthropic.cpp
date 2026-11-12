@@ -40,7 +40,9 @@ bool GuessAdaptive(const std::string& model) {
 }
 
 json ImageBlock(const ImageData& img) {
-    return {{"type", "image"}, {"source", {{"type", "base64"}, {"media_type", img.mediaType}, {"data", img.base64}}}};
+    // A PDF is a document block; Claude reads its text and sees its pages.
+    return {{"type", img.IsPdf() ? "document" : "image"},
+            {"source", {{"type", "base64"}, {"media_type", img.mediaType}, {"data", img.base64}}}};
 }
 
 json UserContent(const Message& m) {

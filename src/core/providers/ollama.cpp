@@ -42,11 +42,13 @@ json BuildMessages(const ChatRequest& request) {
             case Role::System: messages.push_back({{"role", "system"}, {"content", m.content}}); break;
             case Role::User: {
                 json msg = {{"role", "user"}, {"content", m.content}};
-                if (!m.images.empty()) {
-                    json images = json::array();
-                    for (const auto& img : m.images) images.push_back(img.base64);
-                    msg["images"] = images;
+                json images = json::array();
+                for (const auto& img : m.images) {
+                    // Ollama takes images only.
+                    if (img.IsPdf()) msg["content"] = msg["content"].get<std::string>() + "\n\n[A PDF, " + img.name + ", was attached but cannot be sent to this model.]";
+                    else images.push_back(img.base64);
                 }
+                if (!images.empty()) msg["images"] = images;
                 messages.push_back(msg);
                 break;
             }

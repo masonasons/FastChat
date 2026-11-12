@@ -6,11 +6,15 @@ command and change a file; the sandbox it was given is reported in its
 reasoning so tests can check it.
 """
 import json
+import os
 import sys
 
 args = sys.argv[1:]
 sandbox = args[args.index("--sandbox") + 1] if "--sandbox" in args else "?"
 resume = args[args.index("resume") + 1] if "resume" in args else None
+# Attached images (--image FILE), which must come before the "-" for standard input.
+images = [args[i + 1] for i, a in enumerate(args[:-1]) if a in ("--image", "-i")]
+assert args[-1] == "-", args
 prompt = sys.stdin.read()
 
 
@@ -30,6 +34,10 @@ if "run" in prompt:
     out({"type": "item.completed", "item": {"id": "item_2", "type": "file_change", "status": "completed",
          "changes": [{"path": "src/main.cpp", "kind": "update"}]}})
 text = "All done." + (" Resumed " + resume + "." if resume else "")
+if images:
+    text += " Images: " + ", ".join("%s %d bytes" % (os.path.basename(p), os.path.getsize(p)) for p in images) + "."
+if "cannot read PDFs" in prompt:
+    text += " A PDF was named."
 out({"type": "item.updated", "item": {"id": "item_3", "type": "agent_message", "text": "All"}})
 out({"type": "item.completed", "item": {"id": "item_3", "type": "agent_message", "text": text}})
 out({"type": "turn.completed", "usage": {"input_tokens": 120, "cached_input_tokens": 80, "output_tokens": 15,

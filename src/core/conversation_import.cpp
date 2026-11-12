@@ -1,4 +1,5 @@
 #include "core/conversation_import.h"
+#include "core/attachments.h"
 #include "core/platform.h"
 #include "core/settings.h"
 #include "core/util.h"
@@ -250,7 +251,7 @@ bool ImportBasiliskJson(const std::string& jsonText, const ZipFile* zip, const s
                     if (comma != std::string::npos) {
                         if (mime.empty() && semi != std::string::npos && semi < comma) mime = location.substr(5, semi - 5);
                         if (StartsWith(Lower(mime), "image/")) {
-                            user.images.push_back({mime, location.substr(comma + 1)});
+                            user.images.push_back({mime, location.substr(comma + 1), fileName});
                             continue;
                         }
                         data = Base64Decode(location.substr(comma + 1));
@@ -271,10 +272,10 @@ bool ImportBasiliskJson(const std::string& jsonText, const ZipFile* zip, const s
                 if (!have) {
                     user.content += "\n\n[Attached file, not in the Basilisk file: " + label + "]";
                     notes.push_back("An attachment was missing: " + fileName + ".");
-                } else if (StartsWith(Lower(mime), "image/")) {
-                    user.images.push_back({mime, Base64Encode(data)});
-                } else if (IsTextMime(mime) && IsValidUtf8(data) && data.size() <= 1024 * 1024) {
-                    user.content += "\n\n[Attached file: " + label + "]\n" + data;
+                } else if (StartsWith(Lower(mime), "image/") || Lower(mime) == "application/pdf") {
+                    user.images.push_back({Lower(mime), Base64Encode(data), fileName});
+                } else if (IsTextMime(mime) && IsValidUtf8(data) && data.size() <= kMaxTextBytes) {
+                    user.content += "\n\n" + AttachedTextBlock(label, data);
                 } else {
                     user.content += "\n\n[Attached file, not imported: " + label + (mime.empty() ? "" : ", " + mime) + "]";
                     notes.push_back("An attachment FastChat cannot send was left out: " + fileName + ".");

@@ -50,7 +50,11 @@ std::string ToolCallsToText(const std::vector<ToolCall>& calls) {
 std::string ImagesToText(const std::vector<ImageData>& images) {
     if (images.empty()) return std::string();
     json arr = json::array();
-    for (const auto& i : images) arr.push_back({{"type", i.mediaType}, {"data", i.base64}});
+    for (const auto& i : images) {
+        json one = {{"type", i.mediaType}, {"data", i.base64}};
+        if (!i.name.empty()) one["name"] = i.name;
+        arr.push_back(one);
+    }
     return JsonDump(arr);
 }
 
@@ -58,7 +62,9 @@ std::vector<ImageData> ImagesFromText(const std::string& text) {
     std::vector<ImageData> images;
     json arr = ParseJson(text);
     if (!arr.is_array()) return images;
-    for (const auto& i : arr) images.push_back({i.value("type", std::string()), i.value("data", std::string())});
+    for (const auto& i : arr) {
+        images.push_back({i.value("type", std::string()), i.value("data", std::string()), i.value("name", std::string())});
+    }
     return images;
 }
 

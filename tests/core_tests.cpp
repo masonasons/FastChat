@@ -2,6 +2,7 @@
 // tests/mock_server.py when FASTCHAT_MOCK names its address
 // (e.g. http://127.0.0.1:8765).
 
+#include "core/attachments.h"
 #include "core/chat_engine.h"
 #include "core/code_tools.h"
 #include "core/computer_tools.h"
@@ -614,6 +615,26 @@ static void TestAgents(const std::string& root) {
     CHECK(cxChat.text.find("Resumed thread-1") != std::string::npos);
     CHECK(cxChat.messages.size() == 1 && cxChat.messages[0].reasoning == "sandbox=read-only");
 
+    // Images go to Codex as files (and are cleaned up); a PDF is only named.
+    std::cout << "  codex: attachments\n";
+    {
+        ChatTurn cxFiles;
+        cxFiles.provider = codex;
+        Message asked = UserMessage("What is this?");
+        AttachToMessage(asked, {{"chart.png", "image/png", "PNG"}, {"report.pdf", "application/pdf", "%PDF"}});
+        cxFiles.request.messages = {asked};
+        TestListener cf = Drive(cxFiles);
+        CHECK(cf.outcome == ChatListener::Outcome::Done);
+        CHECK(cf.text.find("Images: image1.png 3 bytes.") != std::string::npos);
+        CHECK(cf.text.find("A PDF was named.") != std::string::npos);
+        bool leftOver = false;
+        std::error_code ec;
+        for (fs::directory_iterator d(PathFromUtf8(JoinPath(GetDataDir(), "agent-images")), ec), end; !ec && d != end; d.increment(ec)) {
+            leftOver = true;
+        }
+        CHECK(!leftOver);
+    }
+
     std::cout << "  claude code: message sent while it works\n";
     ChatTurn live;
     live.provider = claude;
@@ -726,6 +747,27 @@ static void TestAgents(const std::string& root) {
     CHECK_EQ(afterResult.text, std::string("Hello from fake Claude. Resumed sess-9. "));
     for (const auto& m : afterResult.messages) CHECK(!IsAgentCompactionNote(m));
 
+    // Attached images and PDFs go to Claude Code as content blocks, in the
+    // first message and in ones sent while it works.
+    std::cout << "  claude code: attachments\n";
+    ChatTurn withFiles = live;
+    Message asked = UserMessage("What are these?");
+    AttachToMessage(asked, {{"chart.png", "image/png", "PNG"}, {"report.pdf", "application/pdf", "%PDF"}});
+    withFiles.request.messages = {asked};
+    TestListener wf = Drive(withFiles, [](ChatRunner& r) {
+        Message more = UserMessage("And this");
+        AttachToMessage(more, {{"photo.jpg", "image/jpeg", "JPG"}});
+        r.Enqueue(more);
+    });
+    CHECK(wf.outcome == ChatListener::Outcome::Done);
+    bool sawBoth = false, sawQueued = false;
+    for (const auto& m : wf.messages) {
+        sawBoth = sawBoth || m.content == "Saw image image/png and document application/pdf with: What are these?";
+        sawQueued = sawQueued || m.content == "Got: And this with image image/jpeg";
+    }
+    CHECK(sawBoth);
+    CHECK(sawQueued);
+
     std::cout << "  codex: message sent while it works\n";
     ChatTurn cxq;
     cxq.provider = codex;
@@ -767,6 +809,19 @@ static void TestImageRequests(const std::string& base) {
         if (!r.ok) std::cerr << "    " << c.kind << " error: " << r.error << "\n";
         CHECK_EQ(r.text, std::string("I see the image."));
         std::cout << "  " << c.kind << ": " << r.text << "\n";
+
+        // What the user attached: an image and a PDF, each as this API takes them.
+        Message attached;
+        attached.role = Role::User;
+        attached.content = "What are these?";
+        AttachToMessage(attached, {{"chart.png", "image/png", "\x89PNG\r\n\x1a\nfake"}, {"report.pdf", "application/pdf", "%PDF-1.4 fake"}});
+        ChatRequest withFiles;
+        withFiles.model = c.model;
+        withFiles.messages = {attached};
+        ChatResult a = CreateProvider(config)->Chat(withFiles, StreamCallbacks(), nullptr);
+        if (!a.ok) std::cerr << "    " << c.kind << " error: " << a.error << "\n";
+        CHECK_EQ(a.text, std::string("I see the attachments."));
+        std::cout << "  " << c.kind << " attachments: " << a.text << "\n";
     }
 #ifdef _WIN32
     // A whole computer use turn: the model looks (the real accessibility tree
@@ -816,11 +871,18 @@ static void TestImageRequests(const std::string& base) {
 #endif
     // Only the latest screenshots are sent.
     std::vector<Message> history(4);
-    for (auto& m : history) m.images.push_back({"image/jpeg", "x"});
+    for (auto& m : history) {
+        m.role = Role::Tool;
+        m.images.push_back({"image/jpeg", "x"});
+    }
+    Message attached;  // the user's own image, older than all of them, stays
+    attached.images.push_back({"image/png", "y", "photo.png"});
+    history.insert(history.begin(), attached);
     LimitImages(history, 2);
-    CHECK(history[0].images.empty() && history[1].images.empty());
-    CHECK(!history[2].images.empty() && !history[3].images.empty());
-    CHECK(history[0].content.find("left out") != std::string::npos);
+    CHECK(!history[0].images.empty());
+    CHECK(history[1].images.empty() && history[2].images.empty());
+    CHECK(!history[3].images.empty() && !history[4].images.empty());
+    CHECK(history[1].content.find("left out") != std::string::npos);
 }
 
 #ifdef _WIN32
@@ -1206,6 +1268,59 @@ static void TestSoundPackImport(const std::string& dir) {
     }
 }
 
+// Files attached to a message: what they are, what is refused, where they go.
+static void TestAttachments(const std::string& dir) {
+    std::cout << "Attachments:\n";
+    CHECK_EQ(AttachmentType("a.png", "\x89PNG\r\n\x1a\nrest"), std::string("image/png"));
+    CHECK_EQ(AttachmentType("a.jpg", "\xFF\xD8\xFF\xE0rest"), std::string("image/jpeg"));
+    CHECK_EQ(AttachmentType("a.gif", "GIF89a..."), std::string("image/gif"));
+    CHECK_EQ(AttachmentType("a.webp", std::string("RIFF\x10\0\0\0WEBPVP8 ", 16)), std::string("image/webp"));
+    CHECK_EQ(AttachmentType("a.pdf", "%PDF-1.7"), std::string("application/pdf"));
+    CHECK_EQ(AttachmentType("notes.md", "# Notes\ncaf\xC3\xA9\n"), std::string("text/plain"));
+    CHECK_EQ(AttachmentType("app.exe", std::string("MZ\x90\0\x03", 5)), std::string());  // binary: refused
+    CHECK_EQ(AttachmentType("latin1.txt", "caf\xE9"), std::string());                     // not UTF-8 text
+
+    Attachment a;
+    std::string error;
+    CHECK(!MakeAttachment("big.png", "\x89PNG\r\n\x1a\n" + std::string(kMaxImageBytes, 'x'), a, error));
+    CHECK(error.find("big.png") != std::string::npos && error.find("up to") != std::string::npos);
+    CHECK(!MakeAttachment("tool.exe", std::string("MZ\0\0", 4), a, error));
+    CHECK(error.find("images (PNG, JPEG, GIF, WebP), PDFs and text files") != std::string::npos);
+    CHECK(MakeAttachment("bom.txt", "\xEF\xBB\xBFhello", a, error));
+    CHECK_EQ(a.data, std::string("hello"));  // the byte order mark is dropped
+
+    std::string path = JoinPath(dir, "notes.txt");
+    WriteFileText(path, "line one\nline two");
+    CHECK(LoadAttachment(path, a, error) && a.name == "notes.txt" && a.IsText());
+    CHECK(!LoadAttachment(JoinPath(dir, "missing.txt"), a, error));
+    CHECK_EQ(DescribeAttachment(a), std::string("notes.txt, ") + FormatBytes(a.data.size()) + " text file");
+
+    Message m;
+    m.content = "Look at these";
+    AttachToMessage(m, {{"pic.png", "image/png", "PNG"}, a, {"report.pdf", "application/pdf", "%PDF"}});
+    CHECK_EQ(m.content, std::string("Look at these\n\n[Attached file: notes.txt]\nline one\nline two"));
+    CHECK_EQ(m.images.size(), size_t{2});
+    if (m.images.size() == 2) {
+        CHECK(m.images[0].name == "pic.png" && Base64Decode(m.images[0].base64) == "PNG" && !m.images[0].IsPdf());
+        CHECK(m.images[1].IsPdf() && m.images[1].name == "report.pdf");
+    }
+    CHECK_EQ(AttachmentsSuffix(m), std::string(", with pic.png and report.pdf"));
+    Message shot;
+    shot.images.push_back({"image/jpeg", "x"});
+    CHECK_EQ(AttachmentsSuffix(shot), std::string(", with an image"));  // a screenshot has no name
+    CHECK_EQ(AttachmentsSuffix(Message()), std::string());
+
+    // Names stay with them in the database.
+    Database db;
+    CHECK(db.Open(JoinPath(dir, "attach.db")));
+    Conversation c;
+    std::vector<Message> one = {m};
+    CHECK(db.CreateConversationWithMessages(c, one));
+    std::vector<Message> back = db.LoadMessages(c.id);
+    CHECK(back.size() == 1 && back[0].images.size() == 2 && back[0].images[1].name == "report.pdf" && back[0].images[1].IsPdf());
+    db.Close();
+}
+
 // Basilisk conversations (.bskc: a zip with conversation.json and attachments).
 static void TestBasiliskImport(const std::string& dir) {
     std::cout << "Basilisk import:\n";
@@ -1279,23 +1394,23 @@ static void TestBasiliskImport(const std::string& dir) {
         CHECK(GetNoteKind(ms[0]) == NoteKind::Note);
         CHECK(ms[0].content.find("Imported from Basilisk: 3 messages") != std::string::npos);
         CHECK(ms[0].content.find("unknownai") != std::string::npos);
-        CHECK(ms[0].content.find("doc.pdf") != std::string::npos);
         // The first exchange had another system prompt: kept in a note.
         CHECK(GetNoteKind(ms[1]) == NoteKind::Note && ms[1].content.find("Be brief.") != std::string::npos);
         CHECK(ms[2].role == Role::User && ms[2].content == "hello" && ms[2].createdAt == local);
         CHECK(ms[3].role == Role::Assistant && ms[3].content == "hi" && ms[3].model == "google/gemini-4-argon");
         CHECK_EQ(ms[3].createdAt, local + 5);
         CHECK(GetNoteKind(ms[4]) == NoteKind::Note && ms[4].content.find("the one this conversation uses now") != std::string::npos);
-        // Attachments: the image goes with the message, text files into it, the rest named.
+        // Attachments: images and PDFs go with the message, text files into it, links named.
         CHECK(ms[5].role == Role::User);
         CHECK(StartsWith(ms[5].content, "look"));
         CHECK(ms[5].content.find("[Attached file: notes.txt]\nhello") != std::string::npos);
         CHECK(ms[5].content.find("[Attached: https://example.com/a.png]") != std::string::npos);
-        CHECK(ms[5].content.find("not imported: doc.pdf") != std::string::npos);
-        CHECK_EQ(ms[5].images.size(), size_t{1});
-        if (!ms[5].images.empty()) {
+        CHECK_EQ(ms[5].images.size(), size_t{2});
+        if (ms[5].images.size() == 2) {
             CHECK_EQ(ms[5].images[0].mediaType, std::string("image/png"));
+            CHECK_EQ(ms[5].images[0].name, std::string("pic.png"));
             CHECK_EQ(Base64Decode(ms[5].images[0].base64), std::string("PNG!"));
+            CHECK(ms[5].images[1].IsPdf() && ms[5].images[1].name == "doc.pdf");
         }
         CHECK_EQ(ms[6].content, std::string("a cat\n\nSources:\n- Cats: https://cats.example"));
         CHECK(ms[7].role == Role::User && ms[7].content == "bye");  // no reply came
@@ -1311,7 +1426,7 @@ static void TestBasiliskImport(const std::string& dir) {
     CHECK(db.CreateConversationWithMessages(saved, toSave));
     std::vector<Message> loaded = db.LoadMessages(saved.id);
     CHECK_EQ(loaded.size(), size_t{8});
-    if (loaded.size() == 8) CHECK_EQ(loaded[5].images.size(), size_t{1});
+    if (loaded.size() == 8) CHECK_EQ(loaded[5].images.size(), size_t{2});
     db.Close();
 
     // An older Basilisk file: one system prompt for the whole conversation.
@@ -1390,6 +1505,7 @@ int main() {
     TestSoundPacks();
     TestSoundPackImport(dir);
     TestBasiliskImport(dir);
+    TestAttachments(dir);
 
     // Spoken templates: an emptied placeholder leaves no dangling colon.
     EventContext ctx;

@@ -60,7 +60,10 @@ json OpenAIProvider::BuildMessages(const ChatRequest& request) const {
         pendingImages = json::array();
     };
     auto imagePart = [](const ImageData& img) {
-        return json{{"type", "image_url"}, {"image_url", {{"url", "data:" + img.mediaType + ";base64," + img.base64}}}};
+        std::string url = "data:" + img.mediaType + ";base64," + img.base64;
+        // A PDF goes as a file (OpenAI and OpenRouter read it; models see its pages).
+        if (img.IsPdf()) return json{{"type", "file"}, {"file", {{"filename", img.name.empty() ? "document.pdf" : img.name}, {"file_data", url}}}};
+        return json{{"type", "image_url"}, {"image_url", {{"url", url}}}};
     };
     for (const auto& m : request.messages) {
         if (m.role != Role::Tool) flushImages();
