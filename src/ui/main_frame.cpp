@@ -26,11 +26,13 @@ enum {
     ID_CONV_SETTINGS,
     ID_OPEN_FOLDER,
     ID_EXPORT,
-    ID_SETTINGS,
     ID_ACCOUNT,
     ID_SEARCH_FOCUS,
     ID_LIST_FOCUS,
 };
+
+// The stock id puts Settings in the application menu on the Mac (Command+Comma).
+constexpr int ID_SETTINGS = wxID_PREFERENCES;
 
 enum Column { COL_NAME, COL_TYPE, COL_MODEL, COL_UPDATED, COL_MESSAGES, COL_COST };
 
@@ -50,6 +52,9 @@ MainFrame::MainFrame() : wxFrame(nullptr, wxID_ANY, APP_NAME, wxDefaultPosition,
     sizer->Add(LabeledRow(panel, "&Search:", m_search), 0, wxEXPAND | wxALL, 6);
 
     sizer->Add(new wxStaticText(panel, wxID_ANY, "&Conversations"), 0, wxLEFT | wxRIGHT, 6);
+#ifdef __WXOSX__
+    m_list = new wxListBox(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0, nullptr, wxLB_SINGLE);
+#else
     m_list = new wxListCtrl(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
     m_list->AppendColumn("Name", wxLIST_FORMAT_LEFT, 320);
     m_list->AppendColumn("Type", wxLIST_FORMAT_LEFT, 60);
@@ -57,6 +62,7 @@ MainFrame::MainFrame() : wxFrame(nullptr, wxID_ANY, APP_NAME, wxDefaultPosition,
     m_list->AppendColumn("Last used", wxLIST_FORMAT_LEFT, 140);
     m_list->AppendColumn("Messages", wxLIST_FORMAT_RIGHT, 80);
     m_list->AppendColumn("Cost", wxLIST_FORMAT_RIGHT, 80);
+#endif
     sizer->Add(m_list, 1, wxEXPAND | wxALL, 6);
 
     auto* buttons = new wxBoxSizer(wxHORIZONTAL);
@@ -92,21 +98,34 @@ MainFrame::MainFrame() : wxFrame(nullptr, wxID_ANY, APP_NAME, wxDefaultPosition,
 
     m_search->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { Fill(); });
     m_search->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
-        if (e.GetKeyCode() == WXK_DOWN && m_list->GetItemCount() > 0) {
+        if (e.GetKeyCode() == WXK_DOWN && RowCount() > 0) {
             m_list->SetFocus();
             return;
         }
         e.Skip();
     });
+#ifdef __WXOSX__
+    m_list->Bind(wxEVT_LISTBOX_DCLICK, [this](wxCommandEvent&) {
+        wxCommandEvent e;
+        OnOpen(e);
+    });
+    m_list->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
+        wxCommandEvent ce;
+        if (e.GetKeyCode() == WXK_RETURN || e.GetKeyCode() == WXK_NUMPAD_ENTER) OnOpen(ce);
+        else if (IsDeleteKey(e.GetKeyCode(), e.GetModifiers())) OnDelete(ce);
+        else e.Skip();
+    });
+#else
     m_list->Bind(wxEVT_LIST_ITEM_ACTIVATED, [this](wxListEvent&) {
         wxCommandEvent e;
         OnOpen(e);
     });
     m_list->Bind(wxEVT_LIST_KEY_DOWN, [this](wxListEvent& e) {
         wxCommandEvent ce;
-        if (e.GetKeyCode() == WXK_DELETE) OnDelete(ce);
+        if (IsDeleteKey(e.GetKeyCode(), wxGetMouseState().GetModifiers())) OnDelete(ce);
         else e.Skip();
     });
+#endif
     m_list->Bind(wxEVT_CONTEXT_MENU, &MainFrame::OnContextMenu, this);
 
     RefreshList();
@@ -161,9 +180,7 @@ void MainFrame::RefreshList(int64_t selectId) {
     Fill();
     for (size_t i = 0; i < m_shown.size(); i++) {
         if (m_shown[i].id == selectId) {
-            m_list->SetItemState(static_cast<long>(i), wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED,
-                                 wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
-            m_list->EnsureVisible(static_cast<long>(i));
+            SelectRow(static_cast<long>(i));
             break;
         }
     }
@@ -182,36 +199,77 @@ void MainFrame::Fill() {
         m_shown.push_back(c);
     }
     m_list->Freeze();
-    m_list->DeleteAllItems();
     long selectRow = m_shown.empty() ? -1 : 0;
+#ifdef __WXOSX__
+    wxArrayString lines;
+#else
+    m_list->DeleteAllItems();
+#endif
     for (size_t i = 0; i < m_shown.size(); i++) {
         const Conversation& c = m_shown[i];
-        long row = m_list->InsertItem(static_cast<long>(i), U((c.pinned ? "Pinned: " : "") + DisplayTitle(c)));
-        m_list->SetItem(row, COL_TYPE, ConversationTypeName(c.type));
+        long row = static_cast<long>(i);
+        wxString name = U((c.pinned ? "Pinned: " : "") + DisplayTitle(c));
         std::string model;
         if (!c.settings.model.empty()) model = ModelDisplayName(c.settings.providerId, c.settings.model);
         else model = "default";
+        wxString cost = c.totalCost > 0 ? U(FormatMoney(c.totalCost)) : wxString("");
+#ifdef __WXOSX__
+        wxString line = name + ", " + ConversationTypeName(c.type) + ", " + U(model) + ", " +
+                        U(FormatRelativeTime(c.updatedAt)) +
+                        wxString::Format(", %lld messages", static_cast<long long>(c.messageCount));
+        if (!cost.empty()) line += ", " + cost;
+        lines.Add(line);
+#else
+        m_list->InsertItem(row, name);
+        m_list->SetItem(row, COL_TYPE, ConversationTypeName(c.type));
         m_list->SetItem(row, COL_MODEL, U(model));
         m_list->SetItem(row, COL_UPDATED, U(FormatRelativeTime(c.updatedAt)));
         m_list->SetItem(row, COL_MESSAGES, wxString::Format("%lld", static_cast<long long>(c.messageCount)));
-        m_list->SetItem(row, COL_COST, c.totalCost > 0 ? U(FormatMoney(c.totalCost)) : wxString(""));
+        m_list->SetItem(row, COL_COST, cost);
+#endif
         if (c.id == selected) selectRow = row;
     }
-    if (selectRow >= 0) {
-        m_list->SetItemState(selectRow, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED,
-                             wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
-    }
+#ifdef __WXOSX__
+    m_list->Set(lines);
+#endif
+    if (selectRow >= 0) SelectRow(selectRow);
     m_list->Thaw();
 }
 
+long MainFrame::SelectedRow() const {
+#ifdef __WXOSX__
+    return m_list->GetSelection();
+#else
+    return m_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+#endif
+}
+
+void MainFrame::SelectRow(long row) {
+#ifdef __WXOSX__
+    m_list->SetSelection(static_cast<int>(row));
+    m_list->EnsureVisible(static_cast<int>(row));
+#else
+    m_list->SetItemState(row, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED, wxLIST_STATE_SELECTED | wxLIST_STATE_FOCUSED);
+    m_list->EnsureVisible(row);
+#endif
+}
+
+long MainFrame::RowCount() const {
+#ifdef __WXOSX__
+    return static_cast<long>(m_list->GetCount());
+#else
+    return m_list->GetItemCount();
+#endif
+}
+
 int64_t MainFrame::SelectedId() const {
-    long row = m_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    long row = SelectedRow();
     if (row < 0 || row >= static_cast<long>(m_shown.size())) return 0;
     return m_shown[row].id;
 }
 
 Conversation* MainFrame::Selected() {
-    long row = m_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    long row = SelectedRow();
     if (row < 0 || row >= static_cast<long>(m_shown.size())) return nullptr;
     return &m_shown[row];
 }
@@ -321,7 +379,7 @@ void MainFrame::OnDelete(wxCommandEvent&) {
         it->second->CloseSilently();
         m_open.erase(it);
     }
-    long row = m_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+    long row = SelectedRow();
     AppDatabase().DeleteConversation(id);
     NotifyEvent(EventId::MessageDeleted, EventContext(), nullptr);
     int64_t next = 0;
@@ -461,10 +519,15 @@ void MainFrame::OnContextMenu(wxContextMenuEvent& e) {
     menu.Append(ID_NEW, "&New conversation...");
     wxPoint pos = e.GetPosition();
     if (pos == wxDefaultPosition) {
-        long row = m_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
+        long row = SelectedRow();
+#ifdef __WXOSX__
+        (void)row;
+        pos = m_list->ClientToScreen(wxPoint(0, 0));
+#else
         wxRect rect;
         if (row >= 0 && m_list->GetItemRect(row, rect)) pos = m_list->ClientToScreen(rect.GetPosition());
         else pos = m_list->ClientToScreen(wxPoint(0, 0));
+#endif
     }
     PopupMenu(&menu, ScreenToClient(pos));
 }

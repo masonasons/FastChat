@@ -48,6 +48,9 @@ void PostToUi(std::function<void()> fn);
 
 bool CopyToClipboard(const std::string& text);
 bool AskYesNo(wxWindow* parent, const wxString& question, const wxString& title);
+// Delete in a list: the Delete key, and on the Mac also Command+Delete (Backspace),
+// since most Mac keyboards have no forward delete. `modifiers` is wxMOD_*.
+bool IsDeleteKey(int keyCode, int modifiers);
 void ShowError(wxWindow* parent, const wxString& message, const wxString& title = "FastChat");
 
 // A static label followed by a control, in a horizontal row (the label names

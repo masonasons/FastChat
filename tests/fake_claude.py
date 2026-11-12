@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """A stand-in for `claude -p` in stream-json mode, for FastChat's tests.
 
 Follows the events Claude Code 2.1 sends: system/init, stream_event deltas,

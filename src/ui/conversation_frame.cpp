@@ -145,11 +145,12 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
     m_list->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
         int key = e.GetKeyCode();
         int index = SelectedMessage();
-        if (key == WXK_DELETE && index >= 0) {
+        bool del = IsDeleteKey(key, e.GetModifiers() & ~wxMOD_SHIFT);
+        if (del && index >= 0) {
             DeleteMessage(index, e.ShiftDown());
             return;
         }
-        if (key == WXK_DELETE && TakeBackQueued(m_list->GetSelection())) return;
+        if (del && TakeBackQueued(m_list->GetSelection())) return;
         if ((key == WXK_LEFT || key == WXK_RIGHT) && !e.HasAnyModifiers()) {
             SwitchBuffer(m_buffer + (key == WXK_RIGHT ? 1 : -1));
             return;
@@ -1219,7 +1220,7 @@ void ConversationFrame::OnCommand(wxCommandEvent& e) {
         case ID_MSG_DELETE: if (index >= 0) DeleteMessage(index, false); break;
         case ID_MSG_DELETE_AFTER: if (index >= 0) DeleteMessage(index, true); break;
         default:
-            if (e.GetId() >= ID_BUFFER_FIRST && e.GetId() < ID_BUFFER_FIRST + BUF_COUNT) {
+            if (e.GetId() >= ID_BUFFER_FIRST && e.GetId() < ID_BUFFER_FIRST + static_cast<int>(BUF_COUNT)) {
                 SwitchBuffer(e.GetId() - ID_BUFFER_FIRST);
                 m_list->SetFocus();
             } else {

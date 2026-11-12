@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # macOS: one universal app for Apple silicon and Intel Macs. Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Oldest macOS FastChat runs on")
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Architectures to build for")
 
 project(FastChat LANGUAGES C CXX)
 if(APPLE)
@@ -236,6 +237,23 @@ if(WIN32)
         RUNTIME_OUTPUT_DIRECTORY_RELEASE ${FASTCHAT_OUTPUT_DIR}
         RUNTIME_OUTPUT_DIRECTORY_DEBUG ${FASTCHAT_OUTPUT_DIR}
         RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${FASTCHAT_OUTPUT_DIR})
+endif()
+
+if(APPLE)
+    # The app bundle, with the version from version.h and the readme in
+    # Contents/Resources. FastChat.app is written to the repository root.
+    file(STRINGS src/version.h FASTCHAT_VERSION_LINE REGEX "#define APP_VERSION ")
+    string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" FASTCHAT_VERSION "${FASTCHAT_VERSION_LINE}")
+    configure_file(res/mac/Info.plist.in ${CMAKE_CURRENT_BINARY_DIR}/Info.plist @ONLY)
+    set(FASTCHAT_OUTPUT_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE PATH "Where FastChat.app is written")
+    set_target_properties(FastChat PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_BINARY_DIR}/Info.plist
+        RUNTIME_OUTPUT_DIRECTORY ${FASTCHAT_OUTPUT_DIR})
+    add_custom_command(TARGET FastChat POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/README.md
+            $<TARGET_BUNDLE_CONTENT_DIR:FastChat>/Resources/README.md
+        # Ad-hoc signed, so it runs on Apple silicon and keeps its permissions.
+        COMMAND codesign --force --sign - $<TARGET_BUNDLE_DIR:FastChat>)
 endif()
 
 # Tests of the core (no windows): build the fastchat_tests target, then run it,

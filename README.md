@@ -165,8 +165,36 @@ CMake fetches wxWidgets, Prism, nlohmann/json, SQLite and miniaudio into
 already have (FastPlay's, for instance), configure once with
 `-DFETCHCONTENT_SOURCE_DIR_WXWIDGETS=<its source folder>`.
 
-macOS and Linux build with the same CMakeLists.txt (libcurl for HTTP); they have
-not been tried yet.
+### macOS
+
+With the Xcode command line tools (`xcode-select --install`), CMake 3.24+ and
+Ninja (`brew install cmake ninja`):
+
+```sh
+./build.sh
+```
+
+It makes `FastChat.app` in this folder, one app for Apple silicon and Intel Macs
+(macOS 11 or later); `./build.sh native` builds for this Mac only, which is
+faster. `./dist.sh` (or `./build.sh dist`) makes `FastChat-mac.zip` with the app
+and this readme. The app is signed ad hoc rather than by an Apple developer, so
+on another Mac it opens the first time with Control-click > Open.
+
+On the Mac:
+
+- The keys above that use Ctrl use Command (Command+N, Command+Comma...), except
+  stopping speech, which is Control as in VoiceOver. Command+Delete deletes in
+  the lists. Settings is in the FastChat menu.
+- Speech goes through Prism to VoiceOver or the system voices (AVSpeech).
+- FastChat takes the PATH your shell sets up (as Terminal has it), so Claude
+  Code, Codex, Homebrew's tools and the commands of code conversations are found
+  even when it is opened from the Finder.
+- Data lives in `~/Library/Application Support/FastChat`. API keys are only
+  obfuscated there, not encrypted; the settings file is readable by you alone.
+- Computer use conversations are Windows only.
+
+Linux builds with the same CMakeLists.txt (libcurl for HTTP); it has not been
+tried yet.
 
 ## Tests
 
@@ -176,6 +204,9 @@ python tests\mock_server.py 8765
 set FASTCHAT_MOCK=http://127.0.0.1:8765
 build\Release\fastchat_tests.exe
 ```
+
+On the Mac: `./build.sh tests`, `python3 tests/mock_server.py 8765 &`, then
+`FASTCHAT_MOCK=http://127.0.0.1:8765 build/fastchat_tests`.
 
 `mock_server.py` imitates the OpenAI, Anthropic, Gemini and Ollama streaming
 APIs, and `fake_claude.py` / `fake_codex.py` imitate the two coding agents, so

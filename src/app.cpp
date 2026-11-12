@@ -14,8 +14,35 @@
 
 #include <wx/snglinst.h>
 
+#include <cstdlib>
 #include <exception>
 #include <memory>
+
+#ifdef __APPLE__
+// An app opened from the Finder or the Dock gets only /usr/bin:/bin:/usr/sbin:/sbin,
+// so Claude Code, Codex (and the node it runs on) and the tools that code
+// conversations run - git, cmake, Homebrew's - would not be found. Take the PATH
+// the user's own shell sets up, as Terminal would have it.
+static void AdoptLoginShellPath() {
+    const char* shell = std::getenv("SHELL");
+    std::string sh = shell && *shell ? shell : "/bin/zsh";
+    const std::string mark = "__FASTCHAT_PATH__";
+    ProcessResult r = RunShellCommand("'" + sh + "' -ilc 'printf \"" + mark + "%s" + mark + "\" \"$PATH\"'",
+                                      GetHomeDir(), 5000, 1 << 16, nullptr);
+    std::string path;
+    size_t a = r.output.find(mark);
+    size_t b = a == std::string::npos ? a : r.output.find(mark, a + mark.size());
+    if (b != std::string::npos) path = r.output.substr(a + mark.size(), b - a - mark.size());
+    const char* current = std::getenv("PATH");
+    std::string merged = path.empty() ? std::string(current ? current : "/usr/bin:/bin:/usr/sbin:/sbin") : path;
+    // Where Claude Code and Homebrew install, in case the shell did not say.
+    for (const std::string& dir : {GetHomeDir() + "/.local/bin", std::string("/opt/homebrew/bin"),
+                                   std::string("/usr/local/bin")}) {
+        if ((":" + merged + ":").find(":" + dir + ":") == std::string::npos) merged += ":" + dir;
+    }
+    setenv("PATH", merged.c_str(), 1);
+}
+#endif
 
 class FastChatApp : public wxApp {
 public:
@@ -37,6 +64,10 @@ public:
             AppendLog("Fatal: " + what);
             std::abort();
         });
+
+#ifdef __APPLE__
+        AdoptLoginShellPath();
+#endif
 
         m_instance = std::make_unique<wxSingleInstanceChecker>();
         if (m_instance->Create("FastChat-" + wxGetUserId()) && m_instance->IsAnotherRunning()) {
@@ -96,10 +127,15 @@ public:
     }
 
     // Ctrl, pressed anywhere in FastChat, silences speech (as it does a screen reader).
+    // On the Mac that is Control, as in VoiceOver, not Command.
     int FilterEvent(wxEvent& event) override {
         if (event.GetEventType() == wxEVT_KEY_DOWN && AppSettings().speech.ctrlStops) {
             int key = static_cast<wxKeyEvent&>(event).GetKeyCode();
+#ifdef __APPLE__
+            if (key == WXK_RAW_CONTROL) AppSpeech().Stop();
+#else
             if (key == WXK_CONTROL || key == WXK_RAW_CONTROL) AppSpeech().Stop();
+#endif
         }
         return Event_Skip;
     }

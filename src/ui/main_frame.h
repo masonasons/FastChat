@@ -46,8 +46,19 @@ private:
     void OnContextMenu(wxContextMenuEvent&);
     void OnClose(wxCloseEvent&);
 
+    long SelectedRow() const;
+    void SelectRow(long row);
+    long RowCount() const;
+
     wxTextCtrl* m_search;
+    // A report list with columns. On the Mac, wxListCtrl is drawn by wxWidgets
+    // and VoiceOver cannot read it, so there it is a list box (a native table)
+    // with each conversation on one line.
+#ifdef __WXOSX__
+    wxListBox* m_list;
+#else
     wxListCtrl* m_list;
+#endif
     std::vector<Conversation> m_all;
     std::vector<Conversation> m_shown;
     std::map<int64_t, ConversationFrame*> m_open;

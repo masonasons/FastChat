@@ -17,6 +17,14 @@ bool AskYesNo(wxWindow* parent, const wxString& question, const wxString& title)
     return wxMessageBox(question, title, wxYES_NO | wxICON_QUESTION, parent) == wxYES;
 }
 
+bool IsDeleteKey(int keyCode, int modifiers) {
+    if (keyCode == WXK_DELETE || keyCode == WXK_NUMPAD_DELETE) return modifiers == wxMOD_NONE;
+#ifdef __WXOSX__
+    if (keyCode == WXK_BACK) return modifiers == wxMOD_CMD;
+#endif
+    return false;
+}
+
 void ShowError(wxWindow* parent, const wxString& message, const wxString& title) {
     wxMessageBox(message, title, wxOK | wxICON_ERROR, parent);
 }

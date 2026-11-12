@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """A stand-in for `codex exec --json`, for FastChat's tests.
 
 Emits the documented JSONL events. A prompt containing "run" makes it run a

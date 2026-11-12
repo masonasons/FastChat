@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """A stand-in for the AI services, for FastChat's tests.
 
 Speaks just enough of each API: OpenAI chat completions (/openai), Anthropic

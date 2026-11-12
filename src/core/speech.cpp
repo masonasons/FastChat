@@ -42,7 +42,7 @@ public:
         return prism_backend_speak(m_backend, text.c_str(), interrupt) == PRISM_OK;
     }
     void Stop() override {
-        if (m_features & PRISM_BACKEND_SUPPORTS_STOP) prism_backend_stop(m_backend);
+        if (m_features & PRISM_BACKEND_SUPPORTS_STOP) (void)prism_backend_stop(m_backend);
     }
     std::vector<std::string> Voices() override {
         std::vector<std::string> voices;
@@ -64,10 +64,10 @@ public:
         return false;
     }
     void SetRate(int rate) override {
-        if (m_features & PRISM_BACKEND_SUPPORTS_SET_RATE) prism_backend_set_rate(m_backend, rate / 100.0f);
+        if (m_features & PRISM_BACKEND_SUPPORTS_SET_RATE) (void)prism_backend_set_rate(m_backend, rate / 100.0f);
     }
     void SetVolume(int volume) override {
-        if (m_features & PRISM_BACKEND_SUPPORTS_SET_VOLUME) prism_backend_set_volume(m_backend, volume / 100.0f);
+        if (m_features & PRISM_BACKEND_SUPPORTS_SET_VOLUME) (void)prism_backend_set_volume(m_backend, volume / 100.0f);
     }
     std::string Name() const override {
         const char* n = prism_backend_name(m_backend);
