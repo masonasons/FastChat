@@ -94,7 +94,7 @@ private:
 
 }  // namespace
 
-std::unique_ptr<SpeechBackend> CreateSapiBackend() {
+std::unique_ptr<SpeechBackend> CreateSystemVoiceBackend() {
     auto s = std::make_unique<SapiSpeech>();
     if (!s->Init()) return nullptr;
     return s;

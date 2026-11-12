@@ -39,15 +39,15 @@ providers, written in C++ with wxWidgets.
 - **Code conversations** give the model tools inside the folder: list, read,
   find, search, write and edit files, and run commands (asks first by default;
   can be set to run freely or never).
-- **Computer use conversations** (Windows) let a model operate this computer.
+- **Computer use conversations** (Windows and the Mac) let a model operate this computer.
   It sees the window in front through its accessibility tree (every control,
   numbered, the way a screen reader reads it) and, for models that take
   images, a screenshot. It acts on controls directly (press, set text, focus)
   or with the keyboard and mouse (keys, typing, clicks, drags, scrolling).
   FastChat asks before every action (Allow / Don't allow, with an option to
   allow the rest of the conversation), never acts on its own windows, and sends
-  nothing unless the target app is really in front. Ctrl+Alt+Escape stops it
-  from any window. Coding agents (Claude Code, Codex) can't drive it; use a
+  nothing unless the target app is really in front. Ctrl+Alt+Escape
+  (Control+Option+Escape on the Mac) stops it from any window. Coding agents (Claude Code, Codex) can't drive it; use a
   model from an API provider.
 - **Providers** (Settings > Providers): OpenAI, Anthropic, Google Gemini,
   OpenRouter, Ollama Cloud, Ollama on your own machine, DeepSeek, Groq, Mistral,
@@ -183,15 +183,24 @@ on another Mac it opens the first time with Control-click > Open.
 On the Mac:
 
 - The keys above that use Ctrl use Command (Command+N, Command+Comma...), except
-  stopping speech, which is Control as in VoiceOver. Command+Delete deletes in
+  stopping speech, which is Control as in VoiceOver, and stopping computer use,
+  which is Control+Option+Escape (Command+Option+Escape is Force Quit). Command+Delete deletes in
   the lists. Settings is in the FastChat menu.
-- Speech goes through Prism to VoiceOver or the system voices (AVSpeech).
+- Speech goes through Prism (VoiceOver, or the system voices), or straight to
+  the macOS voices (Settings > Speech > Engine) with their own voice, rate and
+  volume.
 - FastChat takes the PATH your shell sets up (as Terminal has it), so Claude
   Code, Codex, Homebrew's tools and the commands of code conversations are found
   even when it is opened from the Finder.
 - Data lives in `~/Library/Application Support/FastChat`. API keys are only
   obfuscated there, not encrypted; the settings file is readable by you alone.
-- Computer use conversations are Windows only.
+- Computer use needs two permissions, which macOS asks for the first time:
+  Accessibility (to read and operate other apps) and Screen & System Audio
+  Recording (for screenshots; the accessibility tree works without it). Turn
+  FastChat on in System Settings > Privacy & Security. Because the app is
+  signed ad hoc, macOS treats each new build as a different app: after
+  rebuilding, remove FastChat from those lists and add it again. The look tool
+  lists the window's controls, then the app's open menu and its menu bar.
 
 Linux builds with the same CMakeLists.txt (libcurl for HTTP); it has not been
 tried yet.

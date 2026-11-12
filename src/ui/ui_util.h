@@ -55,6 +55,8 @@ void ShowError(wxWindow* parent, const wxString& message, const wxString& title 
 
 // A static label followed by a control, in a horizontal row (the label names
 // the control for screen readers). Returns the row sizer.
+// Make `text` the label screen readers give `control` (for rows built by hand).
+void LinkLabel(wxStaticText* text, wxWindow* control);
 wxBoxSizer* LabeledRow(wxWindow* parent, const wxString& label, wxWindow* control, int proportion = 1);
 
 // A three-way choice for per-conversation overrides: "Default (on)", "On", "Off".

@@ -702,8 +702,15 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
     }
     if (computer) {
         // Focus will be in other windows, out of Escape's reach: a key that works anywhere.
+#ifdef __WXOSX__
+        // Control, not Command: Command+Option+Escape is the system's Force Quit.
+        m_stopHotkey = RegisterHotKey(kStopHotkeyId, wxMOD_RAW_CONTROL | wxMOD_ALT, WXK_ESCAPE);
+        const char* stopKeys = "Control+Option+Escape";
+#else
         m_stopHotkey = RegisterHotKey(kStopHotkeyId, wxMOD_CONTROL | wxMOD_ALT, WXK_ESCAPE);
-        SetStatus(m_stopHotkey ? wxString("Working on your computer. Ctrl+Alt+Escape stops it from any window.")
+        const char* stopKeys = "Ctrl+Alt+Escape";
+#endif
+        SetStatus(m_stopHotkey ? wxString("Working on your computer. ") + stopKeys + " stops it from any window."
                                : wxString("Working on your computer. Escape here stops it."));
     }
     return true;

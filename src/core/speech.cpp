@@ -149,8 +149,8 @@ std::vector<std::string> ListPrismBackends() {
 
 #endif
 
-#ifndef _WIN32
-std::unique_ptr<SpeechBackend> CreateSapiBackend() {
+#if !defined(_WIN32) && !defined(__APPLE__)
+std::unique_ptr<SpeechBackend> CreateSystemVoiceBackend() {
     return nullptr;
 }
 #endif
@@ -166,9 +166,9 @@ void Speech::Configure(const SpeechSettings& settings) {
     m_backend.reset();
     m_currentVoice.clear();
     m_currentRate = -1;
-    if (settings.engine == "sapi") m_backend = CreateSapiBackend();
+    if (settings.engine == "system") m_backend = CreateSystemVoiceBackend();
     if (!m_backend) m_backend = CreatePrismBackend(settings.prismBackend);
-    if (!m_backend && settings.engine != "sapi") m_backend = CreateSapiBackend();
+    if (!m_backend && settings.engine != "system") m_backend = CreateSystemVoiceBackend();
     if (!m_backend) return;
     if (!settings.voice.empty()) {
         m_backend->SetVoice(settings.voice);
@@ -233,11 +233,19 @@ bool Speech::PrismAvailable() {
 #endif
 }
 
-bool Speech::SapiAvailable() {
-#ifdef _WIN32
+bool Speech::SystemVoicesAvailable() {
+#if defined(_WIN32) || defined(__APPLE__)
     return true;
 #else
     return false;
+#endif
+}
+
+std::string Speech::SystemVoicesName() {
+#ifdef __APPLE__
+    return "macOS voices (AVSpeech)";
+#else
+    return "SAPI 5 voices";
 #endif
 }
 
@@ -246,7 +254,7 @@ std::vector<std::string> Speech::PrismBackendNames() {
 }
 
 std::vector<std::string> Speech::ListVoices(const std::string& engine, const std::string& prismBackend) {
-    std::unique_ptr<SpeechBackend> b = engine == "sapi" ? CreateSapiBackend() : CreatePrismBackend(prismBackend);
+    std::unique_ptr<SpeechBackend> b = engine == "system" ? CreateSystemVoiceBackend() : CreatePrismBackend(prismBackend);
     if (!b) return {};
     return b->Voices();
 }

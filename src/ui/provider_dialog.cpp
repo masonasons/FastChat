@@ -42,6 +42,9 @@ public:
         m_key = new wxTextCtrl(this, wxID_ANY, U(config.apiKey), wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD);
         m_keyPlain = new wxTextCtrl(this, wxID_ANY, U(config.apiKey));
         m_keyPlain->Hide();
+#ifdef __WXOSX__
+        LinkLabel(m_keyLabel, m_keyPlain);  // both key fields carry the label
+#endif
         auto* keyRow = new wxBoxSizer(wxHORIZONTAL);
         keyRow->Add(m_keyLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         keyRow->Add(m_key, 1, wxALIGN_CENTER_VERTICAL);
@@ -79,7 +82,9 @@ public:
 
         m_model = new wxTextCtrl(this, wxID_ANY, U(config.defaultModel));
         auto* modelRow = new wxBoxSizer(wxHORIZONTAL);
-        modelRow->Add(new wxStaticText(this, wxID_ANY, "Default &model:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        auto* modelLabel = new wxStaticText(this, wxID_ANY, "Default &model:");
+        LinkLabel(modelLabel, m_model);
+        modelRow->Add(modelLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         modelRow->Add(m_model, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         auto* choose = new wxButton(this, wxID_ANY, "C&hoose...");
         modelRow->Add(choose, 0);

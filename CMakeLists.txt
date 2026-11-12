@@ -173,8 +173,14 @@ else()
         src/core/platform/secrets_posix.cpp
         src/core/platform/process_posix.cpp
         src/core/platform/child_posix.cpp
-        src/core/platform/desktop_none.cpp
     )
+endif()
+if(APPLE)
+    list(APPEND FASTCHAT_CORE_SOURCES src/core/platform/speech_avspeech.mm src/core/platform/desktop_mac.mm)
+    set_source_files_properties(src/core/platform/speech_avspeech.mm src/core/platform/desktop_mac.mm
+        PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+elseif(NOT WIN32)
+    list(APPEND FASTCHAT_CORE_SOURCES src/core/platform/desktop_none.cpp)
 endif()
 
 add_library(fastchat_core STATIC ${FASTCHAT_CORE_SOURCES})
@@ -200,7 +206,10 @@ else()
 endif()
 if(APPLE)
     target_link_libraries(fastchat_core PUBLIC "-framework Security" "-framework CoreFoundation"
-        "-framework CoreAudio" "-framework AudioToolbox")
+        "-framework CoreAudio" "-framework AudioToolbox" "-framework AVFoundation" "-framework Foundation"
+        "-framework AppKit" "-framework ApplicationServices" "-framework ImageIO" "-framework CoreGraphics")
+    # ScreenCaptureKit is macOS 14 and later; FastChat still runs on 11.
+    target_link_options(fastchat_core PUBLIC "-Wl,-weak_framework,ScreenCaptureKit")
 endif()
 
 # The application: the windows.

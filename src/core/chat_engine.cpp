@@ -200,11 +200,10 @@ void ChatRunner::RunTurn(ChatTurn turn) {
     ComputerContext computer;
     if (turn.computer) {
         desktop = Desktop::Create();
-        if (!desktop) {
+        std::string why = desktop ? desktop->Unavailable() : std::string("Computer use works on Windows and the Mac only, so far.");
+        if (!why.empty()) {
             m_running = false;
-            Post([](ChatListener& l) {
-                l.OnFinished(ChatListener::Outcome::Failed, "Computer use works on Windows only, so far.");
-            });
+            Post([why](ChatListener& l) { l.OnFinished(ChatListener::Outcome::Failed, why); });
             return;
         }
         computer.desktop = desktop.get();

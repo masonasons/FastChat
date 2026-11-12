@@ -2,11 +2,12 @@
 
 // Seeing and acting on the desktop, for computer use conversations: a target
 // window (never one of FastChat's own), its accessibility tree with numbered
-// elements, screenshots, and keyboard and mouse input. Windows for now
-// (src/core/platform/desktop_windows.cpp); elsewhere Create() returns null.
+// elements, screenshots, and keyboard and mouse input. Windows
+// (platform/desktop_windows.cpp) and the Mac (platform/desktop_mac.mm);
+// elsewhere Create() returns null.
 //
-// Create and use a Desktop on one thread (it sets that thread up for COM and
-// per-monitor DPI); the chat worker thread does.
+// Create and use a Desktop on one thread (on Windows it sets that thread up for
+// COM and per-monitor DPI); the chat worker thread does.
 
 #include <memory>
 #include <string>
@@ -22,6 +23,9 @@ class Desktop {
 public:
     static std::unique_ptr<Desktop> Create();
     virtual ~Desktop() = default;
+
+    // Why it cannot work now (a permission the system has not given), or empty.
+    virtual std::string Unavailable() { return std::string(); }
 
     // The window actions go to, described ("Untitled - Notepad (notepad.exe)"),
     // or empty when there is none.

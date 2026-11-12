@@ -64,6 +64,7 @@ bool Settings::Load() {
         const json& s = *it;
         Get(s, "enabled", speech.enabled);
         Get(s, "engine", speech.engine);
+        if (speech.engine == "sapi") speech.engine = "system";  // its name before the Mac had one
         Get(s, "prismBackend", speech.prismBackend);
         Get(s, "voice", speech.voice);
         Get(s, "rate", speech.rate);

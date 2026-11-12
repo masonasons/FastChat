@@ -119,9 +119,15 @@ std::vector<ToolDef> ComputerToolDefinitions(bool vision) {
         {"type_text", "Type text into whatever has keyboard focus (\\n presses Enter).",
          Schema({{"text", Type("string", "The text to type")}}, {"text"})},
         {"press_keys",
+#ifdef __APPLE__
+         "Press keys: a combination like cmd+s, cmd+q, shift+tab, cmd+shift+g, or several in turn separated by "
+         "spaces (\"down down enter\"). Names: cmd ctrl option (or alt) shift fn enter tab escape space backspace "
+         "delete (forward delete) home end pageup pagedown up down left right f1-f20, or single characters.",
+#else
          "Press keys: a combination like ctrl+s, alt+f4, shift+tab, win+r, or several in turn separated by spaces "
          "(\"down down enter\"). Names: ctrl alt shift win enter tab escape space backspace delete home end pageup "
          "pagedown up down left right f1-f24 apps, or single characters.",
+#endif
          Schema({{"keys", Type("string", "The keys")}}, {"keys"})},
         {"click", "Click an element (by number) or a point.",
          Schema({{"element", element}, {"x", x}, {"y", y},
@@ -147,7 +153,7 @@ std::vector<ToolDef> ComputerToolDefinitions(bool vision) {
 }
 
 ToolOutcome RunComputerTool(const ToolCall& call, ComputerContext& ctx) {
-    if (!ctx.desktop) return Fail("Computer use is not available on this system yet (Windows only).");
+    if (!ctx.desktop) return Fail("Computer use is not available on this system yet (Windows and the Mac only).");
     json args = ArgumentsToObject(call.arguments);
     const std::string& n = call.name;
     Desktop& d = *ctx.desktop;
@@ -261,8 +267,14 @@ ToolOutcome RunComputerTool(const ToolCall& call, ComputerContext& ctx) {
 }
 
 std::string ComputerSystemPrompt(bool vision, const std::string& screen) {
+#ifdef __APPLE__
+    const char* system = "Mac";
+#else
+    const char* system = "Windows computer";
+#endif
     std::string prompt =
-        "You operate the user's Windows computer for them through tools. The user may be using a screen reader, so "
+        std::string("You operate the user's ") + system +
+        " for them through tools. The user may be using a screen reader, so "
         "work the way one does: rely on the accessibility tree from look, act on elements by number (invoke, "
         "set_text, focus) and with keyboard shortcuts before falling back on mouse coordinates.\n\n"
         "How to work:\n"
@@ -273,6 +285,12 @@ std::string ComputerSystemPrompt(bool vision, const std::string& screen) {
         "- The user approves each action, so describe briefly what you are about to do and why.\n"
         "- Ask the user before anything that cannot be undone: deleting, sending, buying, changing settings.\n"
         "- When the task is done, say so in a sentence or two.\n";
+#ifdef __APPLE__
+    prompt +=
+        "- This is macOS: shortcuts use cmd (cmd+s saves, cmd+w closes a window, cmd+q quits, cmd+tab switches apps), "
+        "and an app's menus are in the menu bar at the top of the screen, listed after the window in look; invoke a "
+        "menu bar item to open its menu, then look again to see its items.\n";
+#endif
     if (vision) {
         prompt += "- Screenshots are " + screen +
                   " pixels; coordinates you give (x, y) are in those pixels. Prefer element numbers when an element is "

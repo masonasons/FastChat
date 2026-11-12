@@ -2,6 +2,9 @@
 #include "core/providers/provider.h"
 
 #include <wx/clipbrd.h>
+#ifdef __WXOSX__
+#include <wx/osx/core/private.h>
+#endif
 
 void PostToUi(std::function<void()> fn) {
     if (wxTheApp) wxTheApp->CallAfter(std::move(fn));
@@ -29,18 +32,26 @@ void ShowError(wxWindow* parent, const wxString& message, const wxString& title)
     wxMessageBox(message, title, wxOK | wxICON_ERROR, parent);
 }
 
-wxBoxSizer* LabeledRow(wxWindow* parent, const wxString& label, wxWindow* control, int proportion) {
-    auto* row = new wxBoxSizer(wxHORIZONTAL);
-    auto* text = new wxStaticText(parent, wxID_ANY, label);
+void LinkLabel(wxStaticText* text, wxWindow* control) {
     // Screen readers name a control after the label just before it in window
-    // order, and the control was created first. wxWidgets reorders only its own
-    // list; on Windows the native order has to move too.
+    // order, and the control may have been created first. wxWidgets reorders
+    // only its own list; on Windows the native order has to move too.
     text->MoveBeforeInTabOrder(control);
 #ifdef __WXMSW__
     HWND before = ::GetWindow(static_cast<HWND>(control->GetHWND()), GW_HWNDPREV);
     ::SetWindowPos(static_cast<HWND>(text->GetHWND()), before ? before : HWND_TOP, 0, 0, 0, 0,
                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+#elif defined(__WXOSX__)
+    // VoiceOver takes a control's name from the label created just before it,
+    // which here is the previous row's: point it at its own.
+    if (control->GetPeer() && text->GetLabelPeer()) control->GetPeer()->SetAccessibilityTitleElement(text->GetLabelPeer());
 #endif
+}
+
+wxBoxSizer* LabeledRow(wxWindow* parent, const wxString& label, wxWindow* control, int proportion) {
+    auto* row = new wxBoxSizer(wxHORIZONTAL);
+    auto* text = new wxStaticText(parent, wxID_ANY, label);
+    LinkLabel(text, control);
     row->Add(text, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
     row->Add(control, proportion, wxALIGN_CENTER_VERTICAL);
     return row;

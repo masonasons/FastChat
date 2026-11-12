@@ -903,6 +903,89 @@ static void TestDesktop() {
 }
 #endif
 
+#ifdef __APPLE__
+// The Mac desktop layer, without touching the screen: it can be made, measures
+// the display, lists windows, and refuses unknown elements. Reading other apps
+// needs the Accessibility permission for whatever runs the tests (Terminal...);
+// without it, it says so instead.
+static void TestDesktopMac() {
+    std::cout << "Desktop (computer use):\n";
+    auto desktop = Desktop::Create();
+    CHECK(desktop != nullptr);
+    if (!desktop) return;
+    std::string screen = desktop->ScreenDescription();
+    CHECK(screen.find(" x ") != std::string::npos);
+    std::string why = desktop->Unavailable();
+    if (!why.empty()) {
+        CHECK(why.find("Accessibility") != std::string::npos);
+        std::cout << "  screen " << screen << "; no Accessibility permission, so only that\n";
+        return;
+    }
+    std::string windows = desktop->ListWindows();
+    CHECK(!windows.empty());
+    CHECK(windows.find("FastChat test") == std::string::npos);
+    std::string tree = desktop->Tree(150);
+    CHECK(!tree.empty());
+    if (std::getenv("FASTCHAT_TEST_SHOW_TREE")) std::cout << tree;
+    std::string message;
+    CHECK(!desktop->Invoke(9999, message));
+    CHECK(message.find("no element") != std::string::npos);
+    ComputerContext ctx;
+    ctx.desktop = desktop.get();
+    ctx.approval = "deny";
+    ToolOutcome denied = RunComputerTool({"1", "press_keys", JsonDump({{"keys", "cmd+s"}})}, ctx);
+    CHECK(denied.error);
+    std::cout << "  screen " << screen << "; " << SplitLines(windows).size() << " windows; tree of "
+              << desktop->TargetDescription() << ": " << SplitLines(tree).size() << " lines\n";
+
+    // Real keystrokes, only when asked: a new TextEdit document comes to the
+    // front, is typed in, and is closed without saving.
+    if (const char* input = std::getenv("FASTCHAT_TEST_INPUT"); input && *input) {
+        RunShellCommand("osascript -e 'tell application \"TextEdit\" to activate' "
+                        "-e 'tell application \"TextEdit\" to make new document'",
+                        "", 15000, 4096, nullptr);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        auto d = Desktop::Create();
+        std::string look = d->Tree(200);
+        if (std::getenv("FASTCHAT_TEST_SHOW_TREE")) std::cout << look;
+        CHECK(look.find("(TextEdit)") != std::string::npos);
+        CHECK(look.find("Menu bar:") != std::string::npos);
+        int area = 0;
+        for (const auto& line : SplitLines(look)) {
+            size_t open = line.find('['), close = line.find(']');
+            if (open != std::string::npos && close != std::string::npos && line.find("] text entry area") != std::string::npos) {
+                area = std::stoi(line.substr(open + 1, close - open - 1));
+                break;
+            }
+        }
+        CHECK(area > 0);
+        std::string msg;
+        CHECK(d->SetText(area, "set through accessibility", msg));
+        CHECK(d->ElementDescription(area).find("text entry area") != std::string::npos);
+        CHECK(d->FocusElement(area, msg));
+        CHECK(d->PressKeys("cmd+a", msg));
+        CHECK(d->TypeText("Hi there\nsecond line", msg));
+        CHECK(d->PressKeys("shift+up", msg));
+        std::string focus = d->FocusedDescription();
+        CHECK(focus.find("Hi there\nsecond line") != std::string::npos || focus.find("Hi there") != std::string::npos);
+        int x = 0, y = 0;
+        CHECK(d->ElementPoint(area, x, y));
+        CHECK(d->Click(x, y, "left", 1, msg));
+        Screenshot shot;
+        std::string error;
+        bool captured = d->Capture(shot, error);
+        if (captured) {
+            std::string jpeg = Base64Decode(shot.base64);
+            CHECK(jpeg.size() > 1000 && static_cast<unsigned char>(jpeg[0]) == 0xFF);
+        }
+        std::cout << "  keyboard and mouse in TextEdit: " << focus << "; screenshot: "
+                  << (captured ? std::to_string(shot.width) + " x " + std::to_string(shot.height) : error) << "\n";
+        RunShellCommand("osascript -e 'tell application \"TextEdit\" to close front document saving no'", "", 15000, 4096,
+                        nullptr);
+    }
+}
+#endif
+
 int main() {
     std::string dir = PathToUtf8(fs::temp_directory_path() / ("fastchat-test-" + NewId().substr(0, 8)));
     fs::create_directories(PathFromUtf8(dir));
@@ -917,6 +1000,15 @@ int main() {
     std::cout << "Prism backends:";
     for (const auto& name : Speech::PrismBackendNames()) std::cout << " [" << name << "]";
     std::cout << "\n";
+    if (Speech::SystemVoicesAvailable()) {
+        // The system's own voices, without speaking: listed, and one can be chosen.
+        std::vector<std::string> voices = Speech::ListVoices("system", "");
+        std::cout << Speech::SystemVoicesName() << ": " << voices.size() << "\n";
+        CHECK(!voices.empty());
+        auto backend = CreateSystemVoiceBackend();
+        CHECK(backend && !voices.empty() && backend->SetVoice(voices.front()));
+        CHECK(backend && !backend->SetVoice("No such voice"));
+    }
     TestUtil();
     TestSse();
     TestSecrets();
@@ -935,6 +1027,8 @@ int main() {
 
 #ifdef _WIN32
     TestDesktop();
+#elif defined(__APPLE__)
+    TestDesktopMac();
 #endif
 
     // The real Claude Code, when asked for (it uses the account it is logged in with).

@@ -1,7 +1,8 @@
 #pragma once
 
 // Speech output: through Prism (whatever screen reader is running, or a speech
-// engine it supports) or directly through SAPI 5 on Windows. UI thread only.
+// engine it supports) or directly through the system's own voices: SAPI 5 on
+// Windows, AVSpeech on the Mac. UI thread only.
 
 #include "core/settings.h"
 
@@ -40,9 +41,11 @@ public:
 
     // For the settings dialog.
     static bool PrismAvailable();
-    static bool SapiAvailable();
+    static bool SystemVoicesAvailable();
+    // "SAPI 5 voices", "macOS voices (AVSpeech)".
+    static std::string SystemVoicesName();
     static std::vector<std::string> PrismBackendNames();
-    // Voices of an engine ("prism" with a backend name, or "sapi").
+    // Voices of an engine ("prism" with a backend name, or "system").
     static std::vector<std::string> ListVoices(const std::string& engine, const std::string& prismBackend);
 
 private:
@@ -58,5 +61,6 @@ Speech& AppSpeech();
 
 // Implementations
 std::unique_ptr<SpeechBackend> CreatePrismBackend(const std::string& backendName);
-std::unique_ptr<SpeechBackend> CreateSapiBackend();  // null where SAPI does not exist
+// SAPI 5 on Windows, AVSpeech on the Mac; null elsewhere.
+std::unique_ptr<SpeechBackend> CreateSystemVoiceBackend();
 std::vector<std::string> ListPrismBackends();

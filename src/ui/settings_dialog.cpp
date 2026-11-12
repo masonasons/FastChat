@@ -264,9 +264,9 @@ private:
             m_engine->Append("Prism (screen reader, or a speech engine)");
             m_engineKeys.push_back("prism");
         }
-        if (Speech::SapiAvailable()) {
-            m_engine->Append("SAPI 5 voices");
-            m_engineKeys.push_back("sapi");
+        if (Speech::SystemVoicesAvailable()) {
+            m_engine->Append(U(Speech::SystemVoicesName()));
+            m_engineKeys.push_back("system");
         }
         for (size_t i = 0; i < m_engineKeys.size(); i++) {
             if (m_engineKeys[i] == sp.engine) m_engine->SetSelection(static_cast<int>(i));
@@ -286,6 +286,7 @@ private:
             if (m_backendKeys[i] == sp.prismBackend) m_backend->SetSelection(static_cast<int>(i));
         }
         m_backendLabel = new wxStaticText(panel, wxID_ANY, "Prism &output:");
+        LinkLabel(m_backendLabel, m_backend);
         auto* brow = new wxBoxSizer(wxHORIZONTAL);
         brow->Add(m_backendLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         brow->Add(m_backend, 0);
