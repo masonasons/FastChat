@@ -97,10 +97,11 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
     agent.approval = turn.toolContext.commandApproval;
     // Continue the agent's own session when nothing but new messages from the
     // user came after its last reply; otherwise start afresh with the history.
+    // Its compactions (/compact gets no reply) continue the same session.
     const auto& messages = turn.request.messages;
     for (int i = static_cast<int>(messages.size()) - 1; i >= 0; i--) {
         const Message& m = messages[i];
-        if (m.role == Role::User) continue;
+        if (m.role == Role::User || IsAgentCompactionNote(m)) continue;
         if (m.role == Role::Assistant && m.providerId == turn.provider.id) {
             for (const char* kind : {"claude_code", "codex"}) {
                 if (auto pd = m.providerData.find(kind); pd != m.providerData.end() && pd->is_object()) {

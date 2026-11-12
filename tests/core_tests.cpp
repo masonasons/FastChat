@@ -667,6 +667,27 @@ static void TestAgents(const std::string& root) {
     }
     CHECK(noted);
 
+    // After a /compact (which gets no reply), only the new message is sent, in
+    // the same session; not "/compact" again with the new message after it.
+    std::cout << "  claude code: a message after /compact\n";
+    Message reply;
+    reply.id = 2;
+    reply.role = Role::Assistant;
+    reply.content = "Earlier answer.";
+    reply.providerId = claude.id;
+    reply.providerData["claude_code"] = {{"session_id", "sess-9"}};
+    Message note = MakeNote(NoteKind::Note, "Compacted", {{"agentCompaction", true}});
+    std::vector<Message> history = {UserMessage("Hi", 1), reply, UserMessage("/compact", 3), note,
+                                    UserMessage("Swallowed by a compaction", 5), note, UserMessage("What next?", 7)};
+    CHECK_EQ(ContextMessages(history).size(), size_t{5});        // notes left out for API models
+    CHECK_EQ(ContextMessages(history, true).size(), size_t{7});  // kept for coding agents
+    ChatTurn after = live;
+    after.request.messages = ContextMessages(history, true);
+    TestListener afterResult = Drive(after);
+    CHECK(afterResult.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(afterResult.text, std::string("Hello from fake Claude. Resumed sess-9. "));
+    for (const auto& m : afterResult.messages) CHECK(!IsAgentCompactionNote(m));
+
     std::cout << "  codex: message sent while it works\n";
     ChatTurn cxq;
     cxq.provider = codex;
@@ -1018,9 +1039,13 @@ static void TestSoundPacks() {
         return out;
     };
     CHECK_EQ(words("git commit -m \"a && b\""), std::string("git commit"));
-    CHECK_EQ(words("cd /d C:\\src && \"C:\\Program Files\\Python\\python.exe\" -m pytest"), std::string("python"));
+    CHECK_EQ(words("cd /d C:\\src && \"C:\\Program Files\\Python\\python.exe\" -m pytest"), std::string("python m"));
+    CHECK_EQ(words("git -C C:\\stuff\\FastChat commit -m x"), std::string("git commit"));
+    CHECK_EQ(words("git --no-pager -c core.pager=less log"), std::string("git log"));
+    CHECK_EQ(words("Set-Location C:\\x; git status --short"), std::string("git status"));
     CHECK_EQ(words("set FOO=1 & build.bat release"), std::string("build release"));
-    CHECK_EQ(words("FOO=1 make -j4"), std::string("make"));
+    CHECK_EQ(words("FOO=1 make -j4"), std::string("make j4"));
+    CHECK_EQ(words("git"), std::string("git"));
     CHECK_EQ(words("npm run build 2>&1 | tail -5"), std::string("npm run"));
     CHECK_EQ(words("python script.py"), std::string("python"));
     CHECK_EQ(words("cd src"), std::string());

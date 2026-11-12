@@ -225,9 +225,23 @@ std::vector<std::string> CommandWords(const std::string& command) {
             continue;
         }
         std::vector<std::string> result{program};
-        if (i + 1 < words.size()) {
-            std::string sub = ToLower(words[i + 1]);
-            if (IsPlainWord(sub) && sub[0] != '-') result.push_back(sub);
+        size_t next = i + 1;
+        if (program == "git") {
+            // git's own options come before the subcommand: git -C path commit.
+            while (next < words.size() && StartsWith(words[next], "-")) {
+                std::string opt = words[next++];
+                if ((opt == "-C" || opt == "-c" || opt == "--git-dir" || opt == "--work-tree" || opt == "--namespace") &&
+                    next < words.size()) {
+                    next++;
+                }
+            }
+        }
+        if (next < words.size()) {
+            // An option counts without its dashes: "python -m" gives "m".
+            std::string sub = ToLower(words[next]);
+            size_t dashes = sub.find_first_not_of('-');
+            sub = dashes == std::string::npos ? std::string() : sub.substr(dashes);
+            if (IsPlainWord(sub)) result.push_back(sub);
         }
         return result;
     }

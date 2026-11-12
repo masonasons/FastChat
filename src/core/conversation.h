@@ -141,5 +141,10 @@ NoteKind GetNoteKind(const Message& m);
 Message MakeNote(NoteKind kind, const std::string& content, const json& extra = json::object());
 
 // What the model is sent: the latest compaction summary (as a system message)
-// and the messages after it, without errors or notes.
-std::vector<Message> ContextMessages(const std::vector<Message>& all);
+// and the messages after it, without errors or notes. For a coding agent
+// (`forAgent`), the notes of its own compactions stay: a compaction answers
+// the messages before it, so they are not sent again as new.
+std::vector<Message> ContextMessages(const std::vector<Message>& all, bool forAgent = false);
+
+// A coding agent's note that it compacted its context.
+bool IsAgentCompactionNote(const Message& m);

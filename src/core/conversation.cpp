@@ -171,7 +171,13 @@ Message MakeNote(NoteKind kind, const std::string& content, const json& extra) {
     return m;
 }
 
-std::vector<Message> ContextMessages(const std::vector<Message>& all) {
+bool IsAgentCompactionNote(const Message& m) {
+    if (GetNoteKind(m) != NoteKind::Note) return false;
+    const json& f = m.providerData["fastchat"];
+    return f.is_object() && f.value("agentCompaction", false);
+}
+
+std::vector<Message> ContextMessages(const std::vector<Message>& all, bool forAgent) {
     // The latest summary, and the last message it covers.
     int summary = -1;
     int64_t through = 0;
@@ -190,7 +196,7 @@ std::vector<Message> ContextMessages(const std::vector<Message>& all) {
     }
     for (int i = 0; i < static_cast<int>(all.size()); i++) {
         const Message& m = all[i];
-        if (GetNoteKind(m) != NoteKind::None) continue;
+        if (GetNoteKind(m) != NoteKind::None && !(forAgent && IsAgentCompactionNote(m))) continue;
         if (summary >= 0 && m.id != 0 && m.id <= through) continue;
         out.push_back(m);
     }

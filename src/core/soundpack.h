@@ -44,8 +44,9 @@ void ForgetSoundPackFiles();
 std::string ToolKind(const std::string& toolName);
 
 // The program and subcommand a command line runs, lower case: "git commit -m x"
-// gives {"git", "commit"}; "cd src && C:\Python\python.exe -m pytest" gives
-// {"python"}. Leading "cd" and variable settings are skipped.
+// and "git -C repo commit" give {"git", "commit"}; "cd src && C:\Python\python.exe
+// -m pytest" gives {"python", "m"} (an option without its dashes). Leading "cd"
+// and variable settings are skipped.
 std::vector<std::string> CommandWords(const std::string& command);
 
 // The variants a tool's sounds can have, most specific first (the event key

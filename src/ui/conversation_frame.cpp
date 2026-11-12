@@ -618,14 +618,16 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
     turn.provider = provider;
     turn.request.model = model;
     turn.request.systemPrompt = SystemPrompt();
+    bool agent = false;
     if (const ProviderKindInfo* kind = FindProviderKind(provider.kind);
         kind && (kind->style == ApiStyle::ClaudeCode || kind->style == ApiStyle::Codex)) {
         // Coding agents have their own instructions; add only the user's.
+        agent = true;
         const GeneralSettings& gs = AppSettings().general;
         if (m_conv.settings.systemPrompt) turn.request.systemPrompt = *m_conv.settings.systemPrompt;
         else turn.request.systemPrompt = m_conv.type == ConversationType::Code ? gs.codeSystemPrompt : gs.chatSystemPrompt;
     }
-    turn.request.messages = ContextMessages(m_messages);
+    turn.request.messages = ContextMessages(m_messages, agent);
     turn.request.temperature = m_conv.settings.temperature;
     turn.request.maxTokens = m_conv.settings.maxTokens.value_or(g.maxTokens);
     turn.request.reasoningEffort = m_conv.settings.reasoningEffort.empty() ? g.reasoningEffort : m_conv.settings.reasoningEffort;
@@ -655,8 +657,6 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
 
     // Compaction: asked for, or automatic when the context is filling up.
     // Coding agents manage their own context.
-    const ProviderKindInfo* kindInfo = FindProviderKind(provider.kind);
-    bool agent = kindInfo && (kindInfo->style == ApiStyle::ClaudeCode || kindInfo->style == ApiStyle::Codex);
     int64_t lastId = 0, beforeNew = 0;
     for (int i = static_cast<int>(m_messages.size()) - 1; i >= 0; i--) {
         if (!lastId) lastId = m_messages[i].id;

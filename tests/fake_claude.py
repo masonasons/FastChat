@@ -74,7 +74,7 @@ out({"type": "system", "subtype": "init", "session_id": session, "model": "claud
 out({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
     "seven_day": {"utilization": 0.25, "resetsAt": 1794499200, "status": "allowed"}}}, "session_id": session})
 
-if prompt == "/compact":
+if prompt.startswith("/compact"):  # like Claude Code: what follows is instructions for the summary
     out({"type": "system", "subtype": "compact_boundary", "session_id": session,
          "compact_metadata": {"trigger": "manual", "pre_tokens": 31948, "post_tokens": 6933}})
     out({"type": "user", "message": {"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"},
