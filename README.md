@@ -202,6 +202,14 @@ faster. `./dist.sh` (or `./build.sh dist`) makes `FastChat-mac.zip` with the app
 and this readme. The app is signed ad hoc rather than by an Apple developer, so
 on another Mac it opens the first time with Control-click > Open.
 
+`./dist.sh notarize` (or `./build.sh notarize`) instead signs the app with a
+Developer ID and has Apple notarize it, making `FastChat-mac.dmg` (the app beside
+a link to Applications) and `FastChat-mac.zip`, which open on any Mac without
+warnings. It needs a Developer ID Application certificate in the keychain and an
+App Store Connect API key for the notary service, `AuthKey_<key ID>.p8` in
+`~/.appstoreconnect/private_keys` (set `ASC_KEY_ID`, `ASC_ISSUER_ID` and
+`ASC_KEY_PATH` for another key; the comments in `dist.sh` have the rest).
+
 On the Mac:
 
 - The keys above that use Ctrl use Command (Command+N, Command+Comma...), except

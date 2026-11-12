@@ -25,6 +25,7 @@ models-cache.json
 
 # Distribution (dist.bat)
 *.zip
+*.dmg
 dist_temp/
 
 # Misc

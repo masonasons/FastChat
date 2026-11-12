@@ -5,6 +5,7 @@
 #   ./build.sh no-prism  FastChat without Prism (no speech)
 #   ./build.sh native    only for this Mac's processor, in build-native/ (a faster build)
 #   ./build.sh dist      FastChat, then FastChat-mac.zip (dist.sh)
+#   ./build.sh notarize  FastChat, then a notarized FastChat-mac.dmg and .zip (dist.sh notarize)
 #
 # Needs the Xcode command line tools (xcode-select --install), CMake 3.24+ and
 # Ninja (brew install cmake ninja).
@@ -13,6 +14,7 @@ cd "$(dirname "$0")"
 
 PRISM=ON
 DIST=
+DIST_ARGS=
 TARGETS="--target FastChat"
 ARCHS="arm64;x86_64"
 BUILD=build
@@ -22,6 +24,7 @@ for arg in "$@"; do
         tests) TARGETS="--target FastChat --target fastchat_tests" ;;
         native) ARCHS="$(uname -m)"; BUILD=build-native ;;
         dist) DIST=1 ;;
+        notarize) DIST=1; DIST_ARGS=notarize ;;
         *) echo "Unknown option: $arg"; exit 1 ;;
     esac
 done
@@ -41,7 +44,7 @@ cmake -S . -B $BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DFASTCHAT_PRISM=$PRISM
 cmake --build $BUILD $TARGETS
 
 if [ -n "$DIST" ]; then
-    ./dist.sh
+    ./dist.sh $DIST_ARGS
 fi
 
 echo
