@@ -32,7 +32,7 @@ struct NewConversationChoice {
 bool AskNewConversation(wxWindow* parent, NewConversationChoice& out);
 
 // Settings > (Ctrl+,). `page` selects the starting tab (0 general, 1 providers,
-// 2 speech, 3 sounds). Returns true if the settings changed.
+// 2 speech, 3 sounds, 4 updates). Returns true if the settings changed.
 bool ShowSettingsDialog(wxWindow* parent, int page = 0);
 
 // Add or edit a provider. Returns false if cancelled.

@@ -16,6 +16,7 @@
 #include "core/notify.h"
 #include "core/soundpack.h"
 #include "core/sse.h"
+#include "core/updater.h"
 #include "core/util.h"
 
 #include <miniz.h>
@@ -1310,6 +1311,82 @@ static void TestSoundPackImport(const std::string& dir) {
     }
 }
 
+// The updater: reading the latest release, where it may install, and the script
+// that puts a new build in place.
+static void TestUpdater(const std::string& dir) {
+    std::cout << "Updater:\n";
+    std::string commit = BuildCommit();
+    std::cout << "  this build: " << (commit.empty() ? "(outside git)" : commit) << "\n";
+    CHECK(commit.empty() || commit.size() == 7);
+
+    json release = {{"tag_name", "latest"},
+                    {"target_commitish", "0123456789abcdef0123456789abcdef01234567"},
+                    {"body", "Built from 0123456789abcdef0123456789abcdef01234567: Attach files."},
+                    {"assets",
+                     {{{"name", "FastChat.zip"}, {"browser_download_url", "https://example.com/FastChat.zip"}},
+                      {{"name", "FastChat-mac.zip"}, {"browser_download_url", "https://example.com/FastChat-mac.zip"}}}}};
+    UpdateInfo u = ReadLatestRelease(release.dump(), "abcdef1", "FastChat.zip");
+    CHECK(u.error.empty() && u.available);
+    CHECK_EQ(u.commit, std::string("0123456"));
+    CHECK_EQ(u.downloadUrl, std::string("https://example.com/FastChat.zip"));
+    CHECK(u.notes.find("Attach files.") != std::string::npos);
+    CHECK_EQ(ReadLatestRelease(release.dump(), "abcdef1", "FastChat-mac.zip").downloadUrl, std::string("https://example.com/FastChat-mac.zip"));
+    CHECK(!ReadLatestRelease(release.dump(), "0123456", "FastChat.zip").available);  // already this build
+    CHECK(!ReadLatestRelease(release.dump(), "", "FastChat.zip").available);         // made outside git
+    CHECK(!ReadLatestRelease(release.dump(), "abcdef1", "FastChat-linux.zip").error.empty());  // nothing for it
+    json byText = release;
+    byText["target_commitish"] = "master";  // the commit then comes from the text
+    byText["body"] = "Automated build of master (fedcba9876543210).";
+    CHECK_EQ(ReadLatestRelease(byText.dump(), "abcdef1", "FastChat.zip").commit, std::string("fedcba9"));
+    CHECK(!ReadLatestRelease("not json", "abcdef1", "FastChat.zip").error.empty());
+
+    // Never over a source folder (a build of one's own), nor where it cannot write.
+    std::string source = JoinPath(dir, "update-source");
+    fs::create_directories(PathFromUtf8(source));
+    WriteFileText(JoinPath(source, "CMakeLists.txt"), "project(x)");
+    CHECK(UpdateBlocker(source).find("source folder") != std::string::npos);
+    std::string plain = JoinPath(dir, "update-plain");
+    fs::create_directories(PathFromUtf8(plain));
+    CHECK(UpdateBlocker(plain).empty());
+    CHECK(!UpdateBlocker(JoinPath(dir, "no-such-folder")).empty());
+
+    std::string mac = MacUpdateScript(42, "/tmp/FastChat-mac.zip", "/tmp/x", "/Applications/Fast Chat's.app");
+    CHECK(mac.find("kill -0 42") != std::string::npos);
+    CHECK(mac.find("ditto -x -k '/tmp/FastChat-mac.zip' '/tmp/x'") != std::string::npos);
+    CHECK(mac.find("open '/Applications/Fast Chat'\\''s.app'") != std::string::npos);  // quoted for the shell
+
+#ifdef _WIN32
+    // The Windows script for real (without starting FastChat at the end): the
+    // package's FastChat folder replaces the files, and what it lacks stays.
+    std::string root = JoinPath(dir, "update-run");
+    std::string app = JoinPath(root, "app folder's copy");
+    fs::create_directories(PathFromUtf8(app));
+    WriteFileText(JoinPath(app, "FastChat.exe"), "old exe");
+    WriteFileText(JoinPath(app, "README.md"), "old readme");
+    WriteFileText(JoinPath(app, "portable.txt"), "stays");
+    std::string zip = JoinPath(root, "FastChat.zip");
+    WriteZip(zip, {{"FastChat/FastChat.exe", "new exe"}, {"FastChat/README.md", "new readme"}});
+    std::string script = WindowsUpdateScript(999999, zip, JoinPath(root, "extract"), app);  // no such process: no wait
+    CHECK(script.find("start \"\" \"" + app + "\\FastChat.exe\"") != std::string::npos);
+    std::string withoutStart;
+    for (const auto& line : SplitLines(script)) {
+        if (!StartsWith(line, "start ")) withoutStart += line + "\n";
+    }
+    std::string bat = JoinPath(root, "update.bat");
+    WriteFileText(bat, withoutStart);
+    ProcessResult run = RunShellCommand("\"" + bat + "\"", root, 120000, 100000, nullptr);
+    CHECK(run.started && !run.timedOut);
+    std::string text;
+    CHECK(ReadFileText(JoinPath(app, "FastChat.exe"), text) && text == "new exe");
+    CHECK(ReadFileText(JoinPath(app, "README.md"), text) && text == "new readme");
+    CHECK(ReadFileText(JoinPath(app, "portable.txt"), text) && text == "stays");
+    CHECK(!fs::exists(PathFromUtf8(JoinPath(root, "extract"))));
+    CHECK(!fs::exists(PathFromUtf8(zip)));
+    CHECK(!fs::exists(PathFromUtf8(bat)));  // it deletes itself
+    if (!run.output.empty() && !(text == "stays")) std::cerr << "    script output: " << run.output << "\n";
+#endif
+}
+
 // Files attached to a message: what they are, what is refused, where they go.
 static void TestAttachments(const std::string& dir) {
     std::cout << "Attachments:\n";
@@ -1559,6 +1636,7 @@ int main() {
     TestSoundPackImport(dir);
     TestBasiliskImport(dir);
     TestAttachments(dir);
+    TestUpdater(dir);
 
     // Spoken templates: an emptied placeholder leaves no dangling colon.
     EventContext ctx;

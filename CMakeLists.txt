@@ -188,6 +188,7 @@ set(FASTCHAT_CORE_SOURCES
     src/core/zip.cpp
     src/core/conversation_import.cpp
     src/core/attachments.cpp
+    src/core/updater.cpp
     src/core/miniaudio_impl.c
     src/core/providers/provider.cpp
     src/core/providers/openai_compat.cpp
@@ -226,6 +227,19 @@ endif()
 
 add_library(fastchat_core STATIC ${FASTCHAT_CORE_SOURCES})
 target_include_directories(fastchat_core PUBLIC src PRIVATE ${miniaudio_SOURCE_DIR})
+
+# The commit being built (generated/build_commit.h), for the updater: written at
+# configure time, and again before every build when it changes.
+set(FASTCHAT_GENERATED ${CMAKE_CURRENT_BINARY_DIR}/generated)
+set(FASTCHAT_COMMIT_ARGS -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR} -DOUT=${FASTCHAT_GENERATED}/build_commit.h
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildCommit.cmake)
+execute_process(COMMAND ${CMAKE_COMMAND} ${FASTCHAT_COMMIT_ARGS})
+add_custom_target(fastchat_build_commit
+    COMMAND ${CMAKE_COMMAND} ${FASTCHAT_COMMIT_ARGS}
+    BYPRODUCTS ${FASTCHAT_GENERATED}/build_commit.h
+    COMMENT "Recording the commit being built")
+add_dependencies(fastchat_core fastchat_build_commit)
+target_include_directories(fastchat_core PRIVATE ${FASTCHAT_GENERATED})
 target_link_libraries(fastchat_core PUBLIC nlohmann_json::nlohmann_json fc_sqlite PRIVATE miniz)
 target_compile_definitions(fastchat_core PRIVATE
     MA_NO_ENCODING

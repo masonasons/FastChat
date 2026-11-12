@@ -7,6 +7,7 @@
 #include "core/notify.h"
 #include "core/platform.h"
 #include "core/providers/provider.h"
+#include "core/speech.h"
 #include "core/util.h"
 #include "version.h"
 
@@ -31,6 +32,7 @@ enum {
     ID_ACCOUNT,
     ID_SEARCH_FOCUS,
     ID_LIST_FOCUS,
+    ID_CHECK_UPDATES,
 };
 
 // The stock id puts Settings in the application menu on the Mac (Command+Comma).
@@ -131,9 +133,133 @@ MainFrame::MainFrame() : wxFrame(nullptr, wxID_ANY, APP_NAME, wxDefaultPosition,
 #endif
     m_list->Bind(wxEVT_CONTEXT_MENU, &MainFrame::OnContextMenu, this);
 
+    // Updates: Help > Check for updates, a check at startup, and on a schedule.
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { CheckForUpdates(false); }, ID_CHECK_UPDATES);
+    m_updateTimer.SetOwner(this);
+    m_pendingTimer.SetOwner(this);
+    Bind(wxEVT_TIMER, [this](wxTimerEvent& e) {
+        if (&e.GetTimer() == &m_updateTimer) {
+            CheckForUpdates(true);
+        } else if (m_pendingUpdate) {
+            // An automatic install waits until no response is running.
+            if (AnyConversationBusy()) {
+                m_pendingTimer.StartOnce(60000);
+            } else {
+                UpdateInfo info = *m_pendingUpdate;
+                m_pendingUpdate.reset();
+                InstallUpdate(info, true);
+            }
+        }
+    });
+    ScheduleUpdateChecks();
+    CallAfter([this]() {
+        if (AppSettings().updates.checkAutomatically) CheckForUpdates(true);
+    });
+
     RefreshList();
     UpdateStatus();
     m_list->SetFocus();
+}
+
+void MainFrame::ScheduleUpdateChecks() {
+    const UpdateSettings& u = AppSettings().updates;
+    int hours = u.checkAutomatically ? u.checkEveryHours : 0;
+    if (hours == m_updateTimerHours) return;
+    m_updateTimerHours = hours;
+    m_updateTimer.Stop();
+    if (hours > 0) m_updateTimer.Start(hours * 3600 * 1000);  // a week is within a timer's reach
+}
+
+bool MainFrame::AnyConversationBusy() const {
+    for (const auto& [id, frame] : m_open) {
+        if (frame->IsBusy()) return true;
+    }
+    return false;
+}
+
+void MainFrame::CheckForUpdates(bool automatic) {
+    if (m_updateChecking || m_updateInstalling) return;
+    m_updateChecking = true;
+    if (!automatic) {
+        SetStatusText("Checking for updates...", 0);
+        AppSpeech().Announce("Checking for updates");
+    }
+    RunInBackground<UpdateInfo>(this, []() { return CheckForUpdate(); }, [this, automatic](UpdateInfo info) {
+        m_updateChecking = false;
+        if (!automatic) UpdateStatus();
+        UpdateChecked(info, automatic);
+    });
+}
+
+void MainFrame::UpdateChecked(const UpdateInfo& info, bool automatic) {
+    if (!info.error.empty()) {
+        if (automatic) AppendLog("Update check: " + info.error);
+        else ShowError(this, U(info.error), "Check for updates");
+        return;
+    }
+    if (!info.available) {
+        if (automatic) return;
+        wxString text;
+        if (BuildCommit()[0]) {
+            text = wxString("You have the latest build of FastChat (") + BuildCommit() + ").";
+        } else {
+            text = "This build of FastChat was made outside git, so it cannot tell whether it is the latest. "
+                   "The latest build is " + U(info.commit) + ".";
+        }
+        wxMessageBox(text, "Check for updates", wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+    // Install updates without asking (an automatic check): straight to it.
+    if (automatic && AppSettings().updates.installWithoutAsking) {
+        InstallUpdate(info, true);
+        return;
+    }
+    wxString text = "A new build of FastChat is available (" + U(info.commit) + "; you have " + BuildCommit() +
+                    ").\n\nDownload and install it now? FastChat will restart to finish.";
+    if (!info.notes.empty()) text += "\n\nAbout it:\n" + U(TruncateUtf8(info.notes, 700));
+    if (AskYesNo(this, text, "Update available")) InstallUpdate(info, false);
+}
+
+void MainFrame::InstallUpdate(const UpdateInfo& info, bool automatic) {
+    if (m_updateInstalling) return;
+    if (std::string blocker = UpdateBlockerHere(); !blocker.empty()) {
+        if (automatic) AppendLog("Update not installed: " + blocker);
+        else ShowError(this, U(blocker), "Update");
+        return;
+    }
+    if (AnyConversationBusy()) {
+        if (automatic) {
+            // Not in the middle of a response: when they are all done.
+            m_pendingUpdate = std::make_unique<UpdateInfo>(info);
+            m_pendingTimer.StartOnce(60000);
+            return;
+        }
+        if (!AskYesNo(this, "A response is still running. Install the update now anyway? That stops it.", "Update")) return;
+    }
+    m_updateInstalling = true;
+    AppSpeech().Announce(automatic ? "Installing a new build of FastChat; it will restart." : "Downloading the new build of FastChat");
+    SetStatusText("Downloading the new build of FastChat...", 0);
+    std::string url = info.downloadUrl;
+    RunInBackground<std::pair<std::string, std::string>>(
+        this,
+        [url]() {
+            std::string path, error;
+            if (!DownloadUpdate(url, path, error)) path.clear();
+            return std::make_pair(path, error);
+        },
+        [this, automatic](std::pair<std::string, std::string> result) {
+            std::string error = result.second;
+            if (result.first.empty() || !StartUpdateInstall(result.first, error)) {
+                m_updateInstalling = false;
+                UpdateStatus();
+                if (automatic) AppendLog("Update not installed: " + error);
+                else ShowError(this, "The update could not be installed. " + U(error), "Update");
+                return;
+            }
+            AppSpeech().Announce("Installing the update; FastChat will restart.");
+            Close(true);
+            wxTheApp->CallAfter([]() { wxTheApp->ExitMainLoop(); });
+        });
 }
 
 void MainFrame::BuildMenu() {
@@ -160,6 +286,7 @@ void MainFrame::BuildMenu() {
     conv->Append(ID_SEARCH_FOCUS, "Searc&h\tCtrl+F");
 
     auto* help = new wxMenu();
+    help->Append(ID_CHECK_UPDATES, "Check for &updates...");
     help->Append(wxID_ABOUT, "&About FastChat");
 
     auto* bar = new wxMenuBar();
@@ -505,6 +632,7 @@ void MainFrame::OnSettings(wxCommandEvent&) {
     if (ShowSettingsDialog(this)) {
         for (auto& [id, frame] : m_open) frame->SettingsChanged();
         RefreshList();
+        ScheduleUpdateChecks();
     }
 }
 
@@ -522,7 +650,8 @@ void MainFrame::OnAccount(wxCommandEvent&) {
 }
 
 void MainFrame::OnAbout(wxCommandEvent&) {
-    wxMessageBox(wxString(APP_NAME " " APP_VERSION "\n\nChat and code with AI models from many providers.\n\nData folder: ") +
+    wxString build = BuildCommit()[0] ? wxString(" (build ") + BuildCommit() + ")" : wxString();
+    wxMessageBox(wxString(APP_NAME " " APP_VERSION) + build + "\n\nChat and code with AI models from many providers.\n\nData folder: " +
                      U(GetDataDir()),
                  "About FastChat", wxOK | wxICON_INFORMATION, this);
 }

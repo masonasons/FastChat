@@ -3,11 +3,13 @@
 // The main window: the list of conversations.
 
 #include "core/conversation.h"
+#include "core/updater.h"
 
 #include <wx/listctrl.h>
 #include <wx/wx.h>
 
 #include <map>
+#include <memory>
 #include <vector>
 
 class ConversationFrame;
@@ -23,8 +25,15 @@ public:
     void ConversationChanged(int64_t id);
     void ConversationClosed(int64_t id);
     void UpdateStatus();
+    // The update settings changed: check on the new schedule.
+    void ScheduleUpdateChecks();
 
 private:
+    // Updates (Help > Check for updates, and the automatic checks).
+    void CheckForUpdates(bool automatic);
+    void UpdateChecked(const UpdateInfo& info, bool automatic);
+    void InstallUpdate(const UpdateInfo& info, bool automatic);
+    bool AnyConversationBusy() const;
     void BuildMenu();
     void Fill();
     int64_t SelectedId() const;
@@ -63,6 +72,13 @@ private:
     std::vector<Conversation> m_all;
     std::vector<Conversation> m_shown;
     std::map<int64_t, ConversationFrame*> m_open;
+    wxTimer m_updateTimer;         // the next automatic check
+    int m_updateTimerHours = -1;   // what it is set for (-1: not set)
+    bool m_updateChecking = false;
+    bool m_updateInstalling = false;
+    // An automatic install waiting for responses to finish.
+    std::unique_ptr<UpdateInfo> m_pendingUpdate;
+    wxTimer m_pendingTimer;
 };
 
 MainFrame* GetMainFrame();

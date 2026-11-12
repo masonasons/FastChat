@@ -84,6 +84,11 @@ bool Settings::Load() {
         Get(*it, "volume", sounds.volume);
         Get(*it, "pack", sounds.pack);
     }
+    if (auto it = root.find("updates"); it != root.end()) {
+        Get(*it, "checkAutomatically", updates.checkAutomatically);
+        Get(*it, "checkEveryHours", updates.checkEveryHours);
+        Get(*it, "installWithoutAsking", updates.installWithoutAsking);
+    }
     if (auto it = root.find("events"); it != root.end() && it->is_object()) {
         for (auto& [key, value] : it->items()) {
             EventId id = EventFromKey(key);
@@ -159,6 +164,9 @@ bool Settings::Save() const {
         {"announceWith", speech.announceWith},
     };
     root["sounds"] = {{"enabled", sounds.enabled}, {"volume", sounds.volume}, {"pack", sounds.pack}};
+    root["updates"] = {{"checkAutomatically", updates.checkAutomatically},
+                       {"checkEveryHours", updates.checkEveryHours},
+                       {"installWithoutAsking", updates.installWithoutAsking}};
     json ev = json::object();
     for (int i = 0; i < static_cast<int>(EventId::Count); i++) {
         const EventConfig& e = events[i];

@@ -25,6 +25,8 @@ public:
     ~ConversationFrame() override;
 
     void FocusInput();
+    // A response (or compaction) is running.
+    bool IsBusy() const { return m_running; }
     // Closing from outside (deleting it, closing FastChat): stops any response.
     void CloseSilently();
     // The conversation was changed elsewhere (renamed in the list).

@@ -117,6 +117,15 @@ providers, written in C++ with wxWidgets.
   Gemini; Ollama takes images only; Claude Code takes both; Codex takes images),
   text files go into the message's text. Your messages' rows name what went
   with them, and Edit and resend brings the attachments back.
+- **Updates**: every change to FastChat is built and published as the
+  [latest build](https://github.com/masonasons/FastChat/releases/latest).
+  Help > Check for updates looks for a newer one; Settings > Updates checks
+  automatically when FastChat starts and, if you like, every hour, 6 or 12 hours,
+  day or week, and can install what it finds without asking (it waits for any
+  response that is running to finish). Installing downloads the new build, puts
+  it over FastChat's folder (or app, on the Mac) and restarts FastChat; a
+  portable copy stays portable. A copy running from its source folder (a build
+  of your own) does not update itself.
 - **Importing conversations**: File > Import conversation (Ctrl+I) opens a
   Basilisk conversation (.bskc) as a new chat: every exchange with its times
   and models, the system prompt (earlier ones kept in notes where they
@@ -204,6 +213,13 @@ exe instead of in %APPDATA%.
 
 It works while FastChat is running: the running FastChat.exe is renamed to
 FastChat.old.exe so the new one can be written; restart FastChat to use it.
+
+GitHub Actions (`.github/workflows/build.yml`) builds every push to master on
+Windows (on the windows-2022 image, whose compiler still supports Windows 7)
+and macOS, runs the tests and the Windows 7 check, and replaces the `latest`
+release with FastChat.zip, FastChat-portable.zip and FastChat-mac.zip. Each
+build records the commit it was made from (`cmake/BuildCommit.cmake`); the
+updater compares it with the commit the release was made at.
 
 CMake fetches wxWidgets, Prism, nlohmann/json, SQLite, miniaudio, miniz and
 YY-Thunks into `build\` on the first run, which takes a while.
@@ -313,6 +329,7 @@ src/core/            everything but the windows
   soundpack.*        sound packs: finding them, the sound for an event, and
                      importing a pack's zip
   attachments.*      files attached to a message: what they are, where they go
+  updater.*          checking the latest build, downloading it, the script that installs it
   conversation_import.*   other apps' conversations (Basilisk)
   zip.*              reading zips (miniz)
 src/ui/              the wxWidgets windows and dialogs

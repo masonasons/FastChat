@@ -8,6 +8,7 @@
 #include "core/providers/provider.h"
 #include "core/soundpack.h"
 #include "core/speech.h"
+#include "core/updater.h"
 #include "core/util.h"
 
 #include <wx/filedlg.h>
@@ -30,6 +31,7 @@ public:
         m_book->AddPage(BuildProviders(), "Providers");
         m_book->AddPage(BuildSpeech(), "Speech");
         m_book->AddPage(BuildSounds(), "Sounds and events");
+        m_book->AddPage(BuildUpdates(), "Updates");
         sizer->Add(m_book, 1, wxEXPAND | wxALL, 8);
         sizer->Add(CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 8);
         SetSizer(sizer);
@@ -433,6 +435,47 @@ private:
         return panel;
     }
 
+    // ---------------- Updates ----------------
+    // How often an automatic check comes round while FastChat runs (hours; 0:
+    // only when it starts).
+    static constexpr int kUpdateHours[] = {0, 1, 6, 12, 24, 168};
+
+    wxWindow* BuildUpdates() {
+        auto* panel = new wxPanel(m_book);
+        auto* s = new wxBoxSizer(wxVERTICAL);
+        const UpdateSettings& u = m_work.updates;
+        s->Add(new wxStaticText(panel, wxID_ANY,
+                                "FastChat updates to its latest build, published with every change. You can always check "
+                                "now from Help > Check for updates; updating downloads the new build and restarts FastChat."),
+               0, wxALL, 6);
+        m_updateAuto = new wxCheckBox(panel, wxID_ANY, "&Check for updates automatically");
+        m_updateAuto->SetValue(u.checkAutomatically);
+        s->Add(m_updateAuto, 0, wxALL, 6);
+        m_updateEvery = new wxChoice(panel, wxID_ANY);
+        for (const char* label : {"Only when FastChat starts", "Every hour", "Every 6 hours", "Every 12 hours", "Every day", "Every week"}) {
+            m_updateEvery->Append(label);
+        }
+        m_updateEvery->SetSelection(0);
+        for (size_t i = 0; i < std::size(kUpdateHours); i++) {
+            if (kUpdateHours[i] == u.checkEveryHours) m_updateEvery->SetSelection(static_cast<int>(i));
+        }
+        s->Add(LabeledRow(panel, "Check &every:", m_updateEvery, 0), 0, wxALL, 6);
+        m_updateSilent = new wxCheckBox(panel, wxID_ANY, "&Install updates without asking");
+        m_updateSilent->SetValue(u.installWithoutAsking);
+        s->Add(m_updateSilent, 0, wxALL, 6);
+        wxString build = BuildCommit()[0] ? wxString("This build: ") + BuildCommit() + "." : wxString("This build was made outside git, so it does not update.");
+        s->Add(new wxStaticText(panel, wxID_ANY, build), 0, wxALL, 6);
+        panel->SetSizer(s);
+        auto enable = [this](wxCommandEvent&) {
+            m_updateEvery->Enable(m_updateAuto->GetValue());
+            m_updateSilent->Enable(m_updateAuto->GetValue());
+        };
+        m_updateAuto->Bind(wxEVT_CHECKBOX, enable);
+        wxCommandEvent none;
+        enable(none);
+        return panel;
+    }
+
     // "None" first, then every pack; selects `select` (kept in the list even if it is gone).
     void FillPacks(const std::string& select) {
         std::vector<std::string> names;
@@ -512,6 +555,9 @@ private:
         m_work.sounds.volume = m_soundVolume->GetValue();
         m_work.sounds.pack = SelectedPack();
         m_events->Save();
+        m_work.updates.checkAutomatically = m_updateAuto->GetValue();
+        m_work.updates.checkEveryHours = kUpdateHours[std::max(0, m_updateEvery->GetSelection())];
+        m_work.updates.installWithoutAsking = m_updateSilent->GetValue();
 
         json windowState = AppSettings().windowState;
         AppSettings() = m_work;
@@ -566,6 +612,10 @@ private:
     wxChoice* m_pack;
     std::vector<std::string> m_packNames;  // the choice's items after "None"
     EventSettingsPanel* m_events;
+    // updates
+    wxCheckBox* m_updateAuto;
+    wxChoice* m_updateEvery;
+    wxCheckBox* m_updateSilent;
 };
 
 }  // namespace

@@ -69,11 +69,19 @@ struct SoundSettings {
     std::string pack;                 // sound pack name; empty: none (built-in tones)
 };
 
+// Updates come from the latest build of FastChat, published with every change.
+struct UpdateSettings {
+    bool checkAutomatically = true;   // when FastChat starts, and...
+    int checkEveryHours = 0;          // ...every this many hours while it runs (0: only when it starts)
+    bool installWithoutAsking = false;  // an automatic check installs what it finds
+};
+
 class Settings {
 public:
     GeneralSettings general;
     SpeechSettings speech;
     SoundSettings sounds;
+    UpdateSettings updates;
     std::vector<ProviderConfig> providers;
     EventConfig events[static_cast<int>(EventId::Count)];
     json windowState = json::object();

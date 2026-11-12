@@ -1,0 +1,129 @@
+name: Build
+
+# Every push to master builds FastChat for Windows and macOS and replaces the
+# rolling "latest" release with the new build. FastChat's updater compares the
+# commit that release was made at (its target) with the commit it was built from.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A newer push makes an older build pointless.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    # Pinned, not windows-latest: that moved to Visual Studio 2026, whose
+    # compiler (MSVC 14.51) dropped Windows 7 from its runtime library.
+    # windows-2022 has Visual Studio 2022 (14.44), the last that supports it;
+    # tests\check_win7.ps1 fails the build if the exe ever needs more than
+    # Windows 7 has.
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # CMake fetches and builds wxWidgets, Prism and the rest into build\ the
+      # first time; keep them between runs.
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: cmake-windows-${{ hashFiles('CMakeLists.txt', 'cmake/**') }}
+          restore-keys: cmake-windows-
+
+      - name: Build FastChat and the tests
+        shell: cmd
+        run: build.bat tests
+
+      - name: Test
+        shell: pwsh
+        run: |
+          $mock = Start-Process python -ArgumentList "tests\mock_server.py", "8765" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          $env:FASTCHAT_MOCK = "http://127.0.0.1:8765"
+          try {
+            & build\Release\fastchat_tests.exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Stop-Process -Id $mock.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Check FastChat.exe runs on Windows 7
+        shell: pwsh
+        run: tests\check_win7.ps1
+
+      - name: Package
+        shell: cmd
+        run: |
+          call dist.bat || exit /b 1
+          call dist.bat portable || exit /b 1
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastChat-windows
+          path: |
+            FastChat.zip
+            FastChat-portable.zip
+
+      # The rolling "latest" release, made at this commit (the updater reads its
+      # target). A full release, not a prerelease, so /releases/latest finds it.
+      - name: Publish as the latest build
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $message = (git log -1 --format=%s)
+          $notes = @"
+          Built from commit $env:GITHUB_SHA on master: $message
+
+          This release is replaced by a new build with every change to FastChat. FastChat updates itself from it (Help > Check for updates, and Settings > Updates).
+
+          - Windows: FastChat.zip (keeps its data in %APPDATA%\FastChat), or FastChat-portable.zip (keeps its data beside FastChat.exe). Windows 7 SP1 and later.
+          - macOS: FastChat-mac.zip (macOS 11 and later, Apple silicon and Intel). Signed ad hoc, not by an Apple developer: the first time, open it with Control-click > Open.
+          "@
+          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+          gh release delete latest --cleanup-tag --yes 2>$null
+          gh release create latest FastChat.zip FastChat-portable.zip --latest --target $env:GITHUB_SHA `
+            --title "Latest build" --notes-file release-notes.md
+
+  macos:
+    # After Windows, so the release exists to attach to.
+    needs: windows
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: cmake-macos-${{ hashFiles('CMakeLists.txt', 'cmake/**') }}
+          restore-keys: cmake-macos-
+
+      - name: Build FastChat.app and FastChat-mac.zip
+        run: ./build.sh dist
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastChat-macos
+          path: FastChat-mac.zip
+
+      - name: Attach to the latest build
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload latest FastChat-mac.zip --clobber
