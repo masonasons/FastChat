@@ -147,3 +147,50 @@ ConversationSettings ConversationSettingsFromJson(const json& j) {
     }
     return s;
 }
+
+NoteKind GetNoteKind(const Message& m) {
+    if (!m.providerData.is_object()) return NoteKind::None;
+    auto it = m.providerData.find("fastchat");
+    if (it == m.providerData.end() || !it->is_object()) return NoteKind::None;
+    std::string kind = it->value("kind", std::string());
+    if (kind == "error") return NoteKind::Error;
+    if (kind == "compaction") return NoteKind::Compaction;
+    if (kind == "note") return NoteKind::Note;
+    return NoteKind::None;
+}
+
+Message MakeNote(NoteKind kind, const std::string& content, const json& extra) {
+    Message m;
+    m.role = Role::System;
+    m.content = content;
+    json f = extra.is_object() ? extra : json::object();
+    f["kind"] = kind == NoteKind::Error ? "error" : kind == NoteKind::Compaction ? "compaction" : "note";
+    m.providerData["fastchat"] = f;
+    return m;
+}
+
+std::vector<Message> ContextMessages(const std::vector<Message>& all) {
+    // The latest summary, and the last message it covers.
+    int summary = -1;
+    int64_t through = 0;
+    for (int i = static_cast<int>(all.size()) - 1; i >= 0; i--) {
+        if (GetNoteKind(all[i]) == NoteKind::Compaction) {
+            summary = i;
+            through = all[i].providerData["fastchat"].value("through", int64_t{0});
+            break;
+        }
+    }
+    std::vector<Message> out;
+    if (summary >= 0) {
+        Message s = all[summary];
+        s.providerData = json();
+        out.push_back(s);
+    }
+    for (int i = 0; i < static_cast<int>(all.size()); i++) {
+        const Message& m = all[i];
+        if (GetNoteKind(m) != NoteKind::None) continue;
+        if (summary >= 0 && m.id != 0 && m.id <= through) continue;
+        out.push_back(m);
+    }
+    return out;
+}

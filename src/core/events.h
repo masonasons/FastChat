@@ -20,6 +20,7 @@ enum class EventId {
     ConversationCreated,
     TitleGenerated,
     MessageDeleted,
+    Compacted,           // the conversation was summarized to save context
     Count
 };
 

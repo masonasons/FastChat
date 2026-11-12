@@ -13,6 +13,21 @@ providers, written in C++ with wxWidgets.
   Actions button, and a status bar with the model, context used of the model's
   window, the last response's tokens and cost, the conversation's total, and the
   provider's credits where it reports them.
+- **Send while it works**: a message sent while the model is busy is queued
+  ("Queued: ..." in the list) and goes to it at its next step, between tool
+  calls or right after it answers. Delete on a queued row takes it back; if you
+  stop the response, queued messages return to the message box. Claude Code
+  takes them while it works; Codex gets them as a follow-up turn.
+- **Compaction**: Ctrl+K (or Actions) summarizes the conversation so far; the
+  summary replaces the older messages in what is sent, while they stay in the
+  list to read. It also happens on its own when the context passes a share of
+  the model's window (80% by default, Settings > General). Claude Code uses its
+  own /compact, and its automatic compactions show in the list too.
+- **Errors explain themselves**: each one becomes a row in the conversation
+  ("Error: ..."); Enter on it shows the provider, address, HTTP status, request
+  id and what the server sent. Rate limits, server errors and dropped
+  connections are tried again automatically (twice) before giving up. Failures
+  are also written to fastchat.log.
 - **Code conversations** give the model tools inside the folder: list, read,
   find, search, write and edit files, and run commands (asks first by default;
   can be set to run freely or never).
@@ -91,6 +106,8 @@ Conversation window:
 | Ctrl+M | Change model |
 | Ctrl+Shift+Comma | Conversation settings |
 | Ctrl+R | Regenerate the last response |
+| Ctrl+K | Compact the conversation |
+| Ctrl | Stop speaking (anywhere in FastChat; can be turned off in Settings > Speech) |
 | Ctrl+Shift+R | Speak the last response |
 | Ctrl+Shift+S | Stop speaking |
 | Ctrl+Shift+C | Copy the last response |

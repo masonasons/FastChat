@@ -85,6 +85,9 @@ private:
         m_computerApproval->SetSelection(g.computerApproval == "auto" ? 1 : g.computerApproval == "deny" ? 2 : 0);
         s->Add(LabeledRow(panel, "Actions in computer use conversations:", m_computerApproval, 0), 0, wxALL, 6);
 
+        m_autoCompact = new wxSpinCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 99, g.autoCompactPercent);
+        s->Add(LabeledRow(panel, "Compact automatically when the context is this many percent full (0: never):", m_autoCompact, 0), 0, wxALL, 6);
+
         m_maxSteps = new wxSpinCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 1000, g.maxToolSteps);
         s->Add(LabeledRow(panel, "Most tool &steps per message:", m_maxSteps, 0), 0, wxALL, 6);
         m_timeout = new wxSpinCtrl(panel, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 5, 7200, g.commandTimeoutSec);
@@ -322,6 +325,9 @@ private:
         m_skipCode = new wxCheckBox(panel, wxID_ANY, "Say \"code block\" instead of reading &code");
         m_skipCode->SetValue(sp.skipCodeBlocks);
         s->Add(m_skipCode, 0, wxALL, 6);
+        m_ctrlStops = new wxCheckBox(panel, wxID_ANY, "Pressing Ctrl stops spee&ch");
+        m_ctrlStops->SetValue(sp.ctrlStops);
+        s->Add(m_ctrlStops, 0, wxALL, 6);
         panel->SetSizer(s);
 
         m_engine->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { UpdateSpeechControls(true); });
@@ -374,6 +380,7 @@ private:
         sp.interrupt = m_interrupt->GetValue();
         sp.stripMarkdown = m_stripMarkdown->GetValue();
         sp.skipCodeBlocks = m_skipCode->GetValue();
+        sp.ctrlStops = m_ctrlStops->GetValue();
     }
 
     // ---------------- Sounds ----------------
@@ -404,6 +411,7 @@ private:
         g.commandApproval = m_approval->GetSelection() == 1 ? "auto" : m_approval->GetSelection() == 2 ? "deny" : "ask";
         g.computerApproval = m_computerApproval->GetSelection() == 1 ? "auto" : m_computerApproval->GetSelection() == 2 ? "deny" : "ask";
         g.maxToolSteps = m_maxSteps->GetValue();
+        g.autoCompactPercent = m_autoCompact->GetValue();
         g.commandTimeoutSec = m_timeout->GetValue();
         if (!m_work.FindProvider(g.defaultProviderId)) {
             g.defaultProviderId = m_work.providers.empty() ? std::string() : m_work.providers.front().id;
@@ -435,6 +443,7 @@ private:
     wxChoice* m_approval;
     wxChoice* m_computerApproval;
     wxSpinCtrl* m_maxSteps;
+    wxSpinCtrl* m_autoCompact;
     wxSpinCtrl* m_timeout;
     wxStaticText* m_titleModelLabel;
     // providers
@@ -457,6 +466,7 @@ private:
     wxCheckBox* m_interrupt;
     wxCheckBox* m_stripMarkdown;
     wxCheckBox* m_skipCode;
+    wxCheckBox* m_ctrlStops;
     // sounds
     wxCheckBox* m_soundsOn;
     wxSlider* m_soundVolume;

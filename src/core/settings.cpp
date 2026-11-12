@@ -58,6 +58,7 @@ bool Settings::Load() {
         Get(g, "computerApproval", general.computerApproval);
         Get(g, "commandTimeoutSec", general.commandTimeoutSec);
         Get(g, "focusResponse", general.focusResponse);
+        Get(g, "autoCompactPercent", general.autoCompactPercent);
     }
     if (auto it = root.find("speech"); it != root.end()) {
         const json& s = *it;
@@ -74,6 +75,7 @@ bool Settings::Load() {
         Get(s, "interrupt", speech.interrupt);
         Get(s, "stripMarkdown", speech.stripMarkdown);
         Get(s, "skipCodeBlocks", speech.skipCodeBlocks);
+        Get(s, "ctrlStops", speech.ctrlStops);
     }
     if (auto it = root.find("sounds"); it != root.end()) {
         Get(*it, "enabled", sounds.enabled);
@@ -134,6 +136,7 @@ bool Settings::Save() const {
         {"computerApproval", general.computerApproval},
         {"commandTimeoutSec", general.commandTimeoutSec},
         {"focusResponse", general.focusResponse},
+        {"autoCompactPercent", general.autoCompactPercent},
     };
     root["speech"] = {
         {"enabled", speech.enabled},
@@ -149,6 +152,7 @@ bool Settings::Save() const {
         {"interrupt", speech.interrupt},
         {"stripMarkdown", speech.stripMarkdown},
         {"skipCodeBlocks", speech.skipCodeBlocks},
+        {"ctrlStops", speech.ctrlStops},
     };
     root["sounds"] = {{"enabled", sounds.enabled}, {"volume", sounds.volume}};
     json ev = json::object();

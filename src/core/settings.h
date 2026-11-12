@@ -42,6 +42,7 @@ struct GeneralSettings {
     std::string computerApproval = "ask"; // computer use actions: "ask", "auto", "deny"
     int commandTimeoutSec = 120;
     bool focusResponse = false;           // move focus to a new response when it completes
+    int autoCompactPercent = 80;          // compact when the context is this full; 0: never
 };
 
 struct SpeechSettings {
@@ -58,6 +59,7 @@ struct SpeechSettings {
     bool interrupt = true;            // new speech cuts off what is speaking
     bool stripMarkdown = true;
     bool skipCodeBlocks = false;      // say "code block" instead of reading the code
+    bool ctrlStops = true;            // the Ctrl key silences speech
 };
 
 struct SoundSettings {

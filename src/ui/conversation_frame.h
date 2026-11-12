@@ -36,6 +36,9 @@ public:
     void OnToolRunning(const ToolCall& call, const std::string& description) override;
     void OnApproveCommand(const std::string& what, bool isCommand, std::function<void(bool)> answer) override;
     void OnFinished(Outcome outcome, const std::string& error) override;
+    void OnStatus(const std::string& text) override;
+    void OnProblem(const std::string& error, const std::string& details) override;
+    void OnQueuedDelivered(Message& message) override;
 
 private:
     void BuildMenuIds();
@@ -52,7 +55,12 @@ private:
     int SelectedMessage() const;
 
     void Send();
-    bool StartTurn();
+    bool StartTurn(bool compactOnly = false);
+    void Compact();
+    bool TakeBackQueued(int row);
+    // Messages queued too late for a turn: sent next, or given back after a stop.
+    void HandleLeftover(Outcome outcome, std::vector<Message>& leftover);
+    int64_t ContextUsed(bool& exact) const;
     bool ResolveModel(ProviderConfig& provider, std::string& model, std::string& error) const;
     std::string SystemPrompt() const;
     void SaveConversation();
@@ -123,6 +131,8 @@ private:
     std::string m_statusText;
     int64_t m_turnStartMs = 0;
     bool m_autoApprove = false;
+    bool m_compacting = false;
+    std::vector<std::string> m_queued;  // messages sent while it works, not yet taken
     bool m_stopHotkey = false;
     bool m_silentClose = false;
     int64_t m_lastCreditsCheck = 0;

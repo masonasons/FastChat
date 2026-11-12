@@ -6,6 +6,7 @@
 #include "core/providers/provider_impl.h"
 #include "core/util.h"
 
+#include <chrono>
 #include <map>
 
 namespace {
@@ -217,6 +218,15 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         child.Write(JsonDump(r) + "\n");
     };
 
+    // A message written after the model's last request may start another turn
+    // (another result), or be taken into the one finishing: after a result,
+    // wait a moment before closing standard input.
+    bool wroteSinceRequest = false;
+    bool stdinOpen = true;
+    std::chrono::steady_clock::time_point closeAt{};
+    double totalCost = 0;
+    bool anyCost = false;
+
     std::string line;
     for (;;) {
         if (cancel && cancel->load()) {
@@ -224,9 +234,26 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
             result.cancelled = true;
             break;
         }
+        if (stdinOpen && callbacks.takeQueued) {
+            for (auto& m : callbacks.takeQueued()) {
+                json msg = {{"type", "user"}, {"message", {{"role", "user"}, {"content", m.content}}}};
+                child.Write(JsonDump(msg) + "\n");
+                if (callbacks.onQueuedDelivered) callbacks.onQueuedDelivered(m);
+                wroteSinceRequest = true;
+                closeAt = {};
+            }
+        }
         ChildProcess::Read r = child.ReadLine(line, 100);
-        if (r == ChildProcess::Read::Timeout) continue;
+        if (r == ChildProcess::Read::Timeout) {
+            if (stdinOpen && closeAt != std::chrono::steady_clock::time_point{} &&
+                std::chrono::steady_clock::now() >= closeAt) {
+                child.CloseStdin();
+                stdinOpen = false;
+            }
+            continue;
+        }
         if (r == ChildProcess::Read::End) break;
+        closeAt = {};
         json ev = json::parse(line, nullptr, false);
         if (!ev.is_object()) continue;
         std::string type = Str(ev, "type");
@@ -235,9 +262,18 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         if (type == "system" && Str(ev, "subtype") == "init") {
             session = Str(ev, "session_id");
             result.model = Str(ev, "model");
+        } else if (type == "system" && Str(ev, "subtype") == "compact_boundary") {
+            // Claude Code compacted its context (asked with /compact, or by itself).
+            const json& meta = ev.value("compact_metadata", json::object());
+            std::string text = std::string(Str(meta, "trigger") == "manual" ? "Compacted" : "Claude Code compacted the conversation");
+            int64_t pre = meta.value("pre_tokens", int64_t{0}), post = meta.value("post_tokens", int64_t{0});
+            if (pre) text += ": " + FormatTokensShort(pre) + " tokens down to " + FormatTokensShort(post);
+            Message note = MakeNote(NoteKind::Note, text, {{"agentCompaction", true}});
+            if (callbacks.onNote) callbacks.onNote(note);
         } else if (type == "stream_event" && topLevel) {
             const json& e = ev.value("event", json::object());
             std::string etype = Str(e, "type");
+            if (etype == "message_start") wroteSinceRequest = false;
             if (etype == "content_block_start") {
                 const json& block = e.value("content_block", json::object());
                 if (Str(block, "type") == "tool_use" && callbacks.onToolCallStarted) callbacks.onToolCallStarted(Str(block, "name"));
@@ -340,7 +376,11 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 flush();
             }
             result.usage = ReadUsage(ev.value("usage", json::object()));
-            if (auto cost = ev.find("total_cost_usd"); cost != ev.end() && cost->is_number()) result.usage.cost = cost->get<double>();
+            if (auto cost = ev.find("total_cost_usd"); cost != ev.end() && cost->is_number()) {
+                totalCost += cost->get<double>();
+                anyCost = true;
+            }
+            if (anyCost) result.usage.cost = totalCost;
             result.stopReason = Str(ev, "stop_reason");
             result.text = Str(ev, "result");
             if (ev.value("is_error", false) || StartsWith(Str(ev, "subtype"), "error")) {
@@ -351,8 +391,14 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                     }
                 }
                 result.error = why.empty() ? "Claude Code stopped: " + Str(ev, "subtype") : why;
+                result.errorDetails = "Claude Code reported: " + OneLine(line, 3000) + "\n";
             }
-            child.CloseStdin();
+            if (wroteSinceRequest && result.error.empty()) {
+                closeAt = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            } else if (stdinOpen) {
+                child.CloseStdin();
+                stdinOpen = false;
+            }
         }
     }
     flush();
@@ -360,8 +406,10 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
     result.providerData["claude_code"] = {{"session_id", session}};
     if (result.cancelled) return result;
     if (!gotResult && result.error.empty()) {
-        std::string err = Trim(child.Stderr());
+        std::string err = Trim(SanitizeUtf8(child.Stderr()));
         result.error = err.empty() ? std::string("Claude Code ended without finishing") : "Claude Code: " + OneLine(err, 400);
+        result.errorDetails = "Program: " + program + "\nWhat it wrote to its error output:\n" +
+                              (err.empty() ? std::string("(nothing)") : TruncateUtf8(err, 4000)) + "\n";
     }
     if (result.model.empty()) result.model = req.model;
     result.ok = result.error.empty();

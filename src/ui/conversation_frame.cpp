@@ -27,6 +27,7 @@ enum {
     ID_INFO,
     ID_EXPORT,
     ID_CLEAR,
+    ID_COMPACT,
     ID_OPEN_FOLDER,
     ID_ACCOUNT,
     ID_CLOSE,
@@ -95,6 +96,7 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
         {wxACCEL_CTRL | wxACCEL_SHIFT, 'A', ID_ACCOUNT},
         {wxACCEL_CTRL, 'W', ID_CLOSE},
         {wxACCEL_NORMAL, WXK_F6, ID_FOCUS_LIST},
+        {wxACCEL_CTRL, 'K', ID_COMPACT},
     };
     SetAcceleratorTable(wxAcceleratorTable(static_cast<int>(sizeof(accel) / sizeof(accel[0])), accel));
 
@@ -124,6 +126,7 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
             DeleteMessage(index, e.ShiftDown());
             return;
         }
+        if (key == WXK_DELETE && TakeBackQueued(m_list->GetSelection())) return;
         if ((key == WXK_RETURN || key == WXK_NUMPAD_ENTER) && index >= 0) {
             ViewMessage(index);
             return;
@@ -207,7 +210,17 @@ wxString ConversationFrame::RowText(int index) const {
             text = "You: " + OneLine(m.content);
             break;
         case Role::System:
-            text = "System: " + OneLine(m.content);
+            switch (GetNoteKind(m)) {
+                case NoteKind::Error: text = "Error: " + OneLine(m.content); break;
+                case NoteKind::Note: text = OneLine(m.content); break;
+                case NoteKind::Compaction: {
+                    int count = m.providerData["fastchat"].value("count", 0);
+                    text = "Summary of the " + std::to_string(count) + " earlier messages, which are no longer sent: " +
+                           OneLine(m.content.substr(std::min<size_t>(m.content.size(), 36)), 300);
+                    break;
+                }
+                default: text = "System: " + OneLine(m.content); break;
+            }
             break;
         case Role::Assistant:
             text = AssistantName(m) + ": ";
@@ -250,7 +263,7 @@ int ConversationFrame::RowForMessage(int index) const {
 void ConversationFrame::AppendRow(int index) {
     if (!ShowsRow(m_messages[index])) return;
     int pending = static_cast<int>(m_rows.size());
-    if (m_pendingRow && pending < static_cast<int>(m_list->GetCount())) {
+    if (pending < static_cast<int>(m_list->GetCount())) {
         m_list->Insert(RowText(index), pending);
     } else {
         m_list->Append(RowText(index));
@@ -271,6 +284,7 @@ void ConversationFrame::FillList(int select) {
     if (!rows.empty()) m_list->Append(rows);
     m_pendingRow = false;
     if (m_running) SetPendingRow(true);
+    for (const auto& q : m_queued) m_list->Append(U("Queued: " + OneLine(q, kMaxRowChars)));
     int row = RowForMessage(select);
     if (row >= 0) m_list->SetSelection(row);
     m_list->Thaw();
@@ -294,7 +308,7 @@ void ConversationFrame::SetPendingRow(bool force) {
     wxString row = U(text);
     int index = static_cast<int>(m_rows.size());
     if (!m_pendingRow) {
-        m_list->Append(row);
+        m_list->Insert(row, index);  // before any queued messages
         m_pendingRow = true;
         return;
     }
@@ -340,23 +354,8 @@ void ConversationFrame::UpdateStatusBar() {
         ModelInfo info;
         AppProviderCache().FindModel(provider.id, model, info);
         // The context: what the last response read and wrote, and anything since.
-        int64_t used = 0;
         bool exact = false;
-        int last = -1;
-        for (int i = static_cast<int>(m_messages.size()) - 1; i >= 0; i--) {
-            if (m_messages[i].role == Role::Assistant && m_messages[i].usage.HasTokens()) {
-                last = i;
-                break;
-            }
-        }
-        if (last >= 0) {
-            used = m_messages[last].usage.inputTokens + m_messages[last].usage.outputTokens;
-            exact = true;
-            for (size_t i = last + 1; i < m_messages.size(); i++) used += EstimateTokens(m_messages[i].content);
-        } else {
-            used = EstimateTokens(SystemPrompt());
-            for (const auto& m : m_messages) used += EstimateTokens(m.content) + EstimateTokens(m.reasoning) / 2;
-        }
+        int64_t used = ContextUsed(exact);
         wxString ctx = "Context " + wxString(exact ? "" : "about ") + U(FormatTokensShort(used));
         if (info.contextLength > 0) {
             ctx += " of " + U(FormatTokensShort(info.contextLength)) + " (" +
@@ -465,8 +464,17 @@ void ConversationFrame::Send() {
     std::string text = Trim(S(m_input->GetValue()));
     if (text.empty()) return;
     if (m_running) {
-        SetStatus("Still responding; press Escape to stop it first");
-        wxBell();
+        // Sent while it works: it goes to the model at its next step.
+        Message queued;
+        queued.role = Role::User;
+        queued.conversationId = m_conv.id;
+        queued.content = S(m_input->GetValue());
+        m_runner->Enqueue(queued);
+        m_queued.push_back(queued.content);
+        m_list->Append(U("Queued: " + OneLine(queued.content, kMaxRowChars)));
+        m_input->Clear();
+        NotifyEvent(EventId::MessageSent, MakeContext(), &m_conv.settings);
+        SetStatus("Queued: it goes to the model at its next step. Delete on it in the list takes it back.");
         return;
     }
     ProviderConfig provider;
@@ -491,7 +499,36 @@ void ConversationFrame::Send() {
     m_main->ConversationChanged(m_conv.id);
 }
 
-bool ConversationFrame::StartTurn() {
+void ConversationFrame::Compact() {
+    if (m_running) {
+        SetStatus("Wait for the response to finish, or stop it, before compacting");
+        return;
+    }
+    ProviderConfig provider;
+    std::string model, error;
+    if (!ResolveModel(provider, model, error)) {
+        ShowError(this, U(error));
+        return;
+    }
+    const ProviderKindInfo* kind = FindProviderKind(provider.kind);
+    if (kind && kind->style == ApiStyle::ClaudeCode) {
+        // Claude Code compacts its own session.
+        m_input->SetValue("/compact");
+        Send();
+        return;
+    }
+    if (kind && kind->style == ApiStyle::Codex) {
+        ShowError(this, "Codex compacts its context on its own; FastChat cannot ask it to.");
+        return;
+    }
+    if (ContextMessages(m_messages).size() < 3) {
+        SetStatus("There is not enough to compact yet");
+        return;
+    }
+    StartTurn(true);
+}
+
+bool ConversationFrame::StartTurn(bool compactOnly) {
     if (m_running) return false;
     ProviderConfig provider;
     std::string model, error;
@@ -511,7 +548,7 @@ bool ConversationFrame::StartTurn() {
         if (m_conv.settings.systemPrompt) turn.request.systemPrompt = *m_conv.settings.systemPrompt;
         else turn.request.systemPrompt = m_conv.type == ConversationType::Code ? gs.codeSystemPrompt : gs.chatSystemPrompt;
     }
-    turn.request.messages = m_messages;
+    turn.request.messages = ContextMessages(m_messages);
     turn.request.temperature = m_conv.settings.temperature;
     turn.request.maxTokens = m_conv.settings.maxTokens.value_or(g.maxTokens);
     turn.request.reasoningEffort = m_conv.settings.reasoningEffort.empty() ? g.reasoningEffort : m_conv.settings.reasoningEffort;
@@ -538,6 +575,32 @@ bool ConversationFrame::StartTurn() {
             m_conv.settings.commandApproval.empty() ? g.computerApproval : m_conv.settings.commandApproval;
     }
     if (m_autoApprove) turn.toolContext.commandApproval = "auto";
+
+    // Compaction: asked for, or automatic when the context is filling up.
+    // Coding agents manage their own context.
+    const ProviderKindInfo* kindInfo = FindProviderKind(provider.kind);
+    bool agent = kindInfo && (kindInfo->style == ApiStyle::ClaudeCode || kindInfo->style == ApiStyle::Codex);
+    int64_t lastId = 0, beforeNew = 0;
+    for (int i = static_cast<int>(m_messages.size()) - 1; i >= 0; i--) {
+        if (!lastId) lastId = m_messages[i].id;
+        if (m_messages[i].role != Role::User || GetNoteKind(m_messages[i]) != NoteKind::None) {
+            beforeNew = m_messages[i].id;
+            break;
+        }
+    }
+    if (compactOnly) {
+        turn.compactOnly = true;
+        turn.compactThrough = lastId;
+        m_compacting = true;
+    } else if (!agent && g.autoCompactPercent > 0 && beforeNew) {
+        ModelInfo info;
+        AppProviderCache().FindModel(provider.id, model, info);
+        bool exact = false;
+        if (info.contextLength > 0 && ContextUsed(exact) * 100 >= info.contextLength * g.autoCompactPercent) {
+            turn.compactFirst = true;
+            turn.compactThrough = beforeNew;
+        }
+    }
     turn.toolContext.commandTimeoutMs = static_cast<unsigned>(g.commandTimeoutSec) * 1000;
 
     m_running = true;
@@ -549,7 +612,8 @@ bool ConversationFrame::StartTurn() {
     m_spokeFirstSentence = false;
     m_streamModel = model;
     m_turnStartMs = NowMillis();
-    SetStatus("Waiting for " + U(ModelDisplayName(provider.id, model)));
+    SetStatus(compactOnly ? wxString("Compacting the conversation")
+                          : "Waiting for " + U(ModelDisplayName(provider.id, model)));
     SetPendingRow(true);
     m_timer.Start(700);
     m_send->SetLabel("&Send");
@@ -689,9 +753,73 @@ void ConversationFrame::OnMessage(Message& message) {
         EventContext ctx = MakeContext();
         ctx.Set("tool", message.toolName).Set("summary", message.reasoning);
         NotifyEvent(EventId::ToolResult, ctx, &m_conv.settings);
+    } else if (GetNoteKind(message) == NoteKind::Compaction ||
+               (GetNoteKind(message) == NoteKind::Note && message.providerData["fastchat"].value("agentCompaction", false))) {
+        NotifyEvent(EventId::Compacted, MakeContext(), &m_conv.settings);
+        SetStatus(GetNoteKind(message) == NoteKind::Compaction ? wxString("Compacted") : U(message.content));
     }
     if (m_running) SetPendingRow(true);
     UpdateStatusBar();
+}
+
+void ConversationFrame::OnQueuedDelivered(Message& message) {
+    // The first queued row becomes a real message.
+    if (!m_queued.empty()) {
+        int row = static_cast<int>(m_rows.size()) + (m_pendingRow ? 1 : 0);
+        if (row < static_cast<int>(m_list->GetCount())) m_list->Delete(row);
+        m_queued.erase(m_queued.begin());
+    }
+    OnMessage(message);
+}
+
+void ConversationFrame::OnStatus(const std::string& text) {
+    SetStatus(U(text));
+    SetPendingRow(true);
+}
+
+void ConversationFrame::OnProblem(const std::string& error, const std::string& details) {
+    // Saved in the conversation, so the details can be read later (Enter on it).
+    Message note = MakeNote(NoteKind::Error, error, {{"details", details}});
+    note.createdAt = NowSeconds();
+    OnMessage(note);
+}
+
+bool ConversationFrame::TakeBackQueued(int row) {
+    int first = static_cast<int>(m_rows.size()) + (m_pendingRow ? 1 : 0);
+    int q = row - first;
+    if (row < 0 || q < 0 || q >= static_cast<int>(m_queued.size())) return false;
+    if (!m_runner->CancelQueued(static_cast<size_t>(q))) {
+        SetStatus("That message has already gone to the model");
+        return true;
+    }
+    m_queued.erase(m_queued.begin() + q);
+    m_list->Delete(row);
+    if (row < static_cast<int>(m_list->GetCount())) m_list->SetSelection(row);
+    else if (row > 0) m_list->SetSelection(row - 1);
+    SetStatus("Took the queued message back");
+    return true;
+}
+
+int64_t ConversationFrame::ContextUsed(bool& exact) const {
+    // What the next request carries: the last response's own count when it is
+    // newer than any compaction, otherwise an estimate of what would be sent.
+    int lastUsage = -1, lastCompaction = -1;
+    for (int i = static_cast<int>(m_messages.size()) - 1; i >= 0; i--) {
+        if (lastUsage < 0 && m_messages[i].role == Role::Assistant && m_messages[i].usage.HasTokens()) lastUsage = i;
+        if (lastCompaction < 0 && GetNoteKind(m_messages[i]) == NoteKind::Compaction) lastCompaction = i;
+    }
+    if (lastUsage > lastCompaction) {
+        exact = true;
+        int64_t used = m_messages[lastUsage].usage.inputTokens + m_messages[lastUsage].usage.outputTokens;
+        for (size_t i = lastUsage + 1; i < m_messages.size(); i++) {
+            if (GetNoteKind(m_messages[i]) == NoteKind::None) used += EstimateTokens(m_messages[i].content);
+        }
+        return used;
+    }
+    exact = false;
+    int64_t used = EstimateTokens(SystemPrompt());
+    for (const auto& m : ContextMessages(m_messages)) used += EstimateTokens(m.content) + EstimateTokens(m.reasoning) / 2;
+    return used;
 }
 
 void ConversationFrame::OnToolRunning(const ToolCall& call, const std::string& description) {
@@ -736,6 +864,15 @@ void ConversationFrame::OnApproveCommand(const std::string& what, bool isCommand
 
 void ConversationFrame::OnFinished(Outcome outcome, const std::string& error) {
     m_running = false;
+    bool compacting = m_compacting;
+    m_compacting = false;
+    // Messages queued too late for this turn.
+    std::vector<Message> leftover = m_runner->TakeQueued();
+    if (!m_queued.empty()) {
+        int first = static_cast<int>(m_rows.size()) + (m_pendingRow ? 1 : 0);
+        for (size_t i = 0; i < m_queued.size() && first < static_cast<int>(m_list->GetCount()); i++) m_list->Delete(first);
+        m_queued.clear();
+    }
     ReleaseStopHotkey();
     m_runningTool.clear();
     m_timer.Stop();
@@ -752,6 +889,12 @@ void ConversationFrame::OnFinished(Outcome outcome, const std::string& error) {
             if (it->usage.cost >= 0) ctx.Set("cost", FormatMoney(it->usage.cost));
             break;
         }
+    }
+    if (compacting && outcome == Outcome::Done) {
+        UpdateStatusBar();
+        m_main->ConversationChanged(m_conv.id);
+        HandleLeftover(outcome, leftover);
+        return;
     }
     switch (outcome) {
         case Outcome::Done:
@@ -783,6 +926,29 @@ void ConversationFrame::OnFinished(Outcome outcome, const std::string& error) {
     if (outcome == Outcome::Done) {
         MaybeGenerateTitle();
         RefreshCredits();
+    }
+    HandleLeftover(outcome, leftover);
+}
+
+void ConversationFrame::HandleLeftover(Outcome outcome, std::vector<Message>& leftover) {
+    if (!leftover.empty()) {
+        if (outcome == Outcome::Done) {
+            // Send them now, as the next turn.
+            for (auto& m : leftover) {
+                m.conversationId = m_conv.id;
+                AppDatabase().AddMessage(m);
+                m_messages.push_back(m);
+                AppendRow(static_cast<int>(m_messages.size()) - 1);
+            }
+            StartTurn();
+        } else {
+            // Stopped or failed: give them back to edit or send again.
+            std::string text;
+            for (const auto& m : leftover) text += (text.empty() ? "" : "\n\n") + m.content;
+            m_input->SetValue(U(text));
+            m_input->SetInsertionPointEnd();
+            SetStatus("Your queued message is back in the message box");
+        }
     }
 }
 
@@ -873,6 +1039,7 @@ void ConversationFrame::OnCommand(wxCommandEvent& e) {
         case ID_INFO: ShowInfo(); break;
         case ID_EXPORT: Export(); break;
         case ID_CLEAR: ClearMessages(); break;
+        case ID_COMPACT: Compact(); break;
         case ID_OPEN_FOLDER:
             if (!m_conv.folder.empty()) OpenWithSystem(m_conv.folder);
             break;
@@ -919,6 +1086,7 @@ void ConversationFrame::ShowActions() {
     menu.Append(ID_CHANGE_MODEL, "Change &model...\tCtrl+M");
     menu.Append(ID_CHAT_SETTINGS, "Conversation &settings...\tCtrl+Shift+,");
     menu.Append(ID_REGENERATE, "&Regenerate the last response\tCtrl+R");
+    menu.Append(ID_COMPACT, "Com&pact the conversation\tCtrl+K");
     menu.AppendSeparator();
     menu.Append(ID_SPEAK_LAST, "S&peak the last response\tCtrl+Shift+R");
     menu.Append(ID_STOP_SPEECH, "Stop spea&king\tCtrl+Shift+S");
@@ -975,8 +1143,16 @@ void ConversationFrame::ViewMessage(int index) {
             text = m.content;
             break;
         case Role::System:
-            title = "System message";
-            text = m.content;
+            if (GetNoteKind(m) == NoteKind::Error) {
+                title = "Error";
+                text = m.content + "\n\nDetails:\n" + m.providerData["fastchat"].value("details", std::string("(none)"));
+            } else if (GetNoteKind(m) == NoteKind::Compaction) {
+                title = "Summary";
+                text = m.content;
+            } else {
+                title = "Note";
+                text = m.content;
+            }
             break;
         case Role::Assistant:
             title = U(AssistantName(m));

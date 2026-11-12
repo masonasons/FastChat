@@ -1,7 +1,10 @@
 #include "core/chat_engine.h"
 #include "core/util.h"
 
+#include "core/platform.h"
+
 #include <chrono>
+#include <thread>
 
 ChatRunner::ChatRunner(std::function<void(std::function<void()>)> post) : m_post(std::move(post)) {}
 
@@ -132,12 +135,51 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
         if (!summary.empty()) AppProviderCache().SetSummary(providerId, summary);
     };
 
-    ChatResult result = provider.RunAgent(agent, callbacks, &m_cancel);
+    // Messages sent meanwhile: Claude Code takes them while it works; any left
+    // over (and all of Codex's) go in a follow-up turn of the same session.
+    callbacks.takeQueued = [this]() { return TakeQueued(); };
+    callbacks.onQueuedDelivered = [this](Message& m) {
+        m.createdAt = NowSeconds();
+        Message copy = m;
+        Post([copy](ChatListener& l) mutable { l.OnQueuedDelivered(copy); });
+    };
+    callbacks.onNote = [this, providerId](Message& note) {
+        note.providerId = providerId;
+        note.createdAt = NowSeconds();
+        Message copy = note;
+        Post([copy](ChatListener& l) mutable { l.OnMessage(copy); });
+    };
+
+    ChatResult result;
+    for (;;) {
+        result = provider.RunAgent(agent, callbacks, &m_cancel);
+        if (!result.ok || result.cancelled || m_cancel) break;
+        std::vector<Message> queued = TakeQueued();
+        if (queued.empty()) break;
+        for (auto& m : queued) {
+            callbacks.onQueuedDelivered(m);
+            agent.request.messages.push_back(m);
+        }
+        for (const char* kind : {"claude_code", "codex"}) {
+            if (auto pd = result.providerData.find(kind); pd != result.providerData.end() && pd->is_object()) {
+                for (const char* key : {"session_id", "thread_id"}) {
+                    if (auto id = pd->find(key); id != pd->end() && id->is_string() && !id->get<std::string>().empty()) {
+                        agent.resumeSession = id->get<std::string>();
+                    }
+                }
+            }
+        }
+    }
     m_running = false;
     ChatListener::Outcome outcome = result.cancelled || m_cancel ? ChatListener::Outcome::Stopped
                                     : result.ok                  ? ChatListener::Outcome::Done
                                                                  : ChatListener::Outcome::Failed;
     std::string error = outcome == ChatListener::Outcome::Failed ? result.error : std::string();
+    if (outcome == ChatListener::Outcome::Failed) {
+        std::string details = result.errorDetails.empty() ? "Provider: " + turn.provider.name + "\n" : result.errorDetails;
+        AppendLog("Agent failed (" + turn.provider.name + "): " + error);
+        Post([error, details](ChatListener& l) { l.OnProblem(error, details); });
+    }
     Post([outcome, error](ChatListener& l) { l.OnFinished(outcome, error); });
 }
 
@@ -183,9 +225,67 @@ void ChatRunner::RunTurn(ChatTurn turn) {
     callbacks.onReasoning = [this](const std::string& t) { Post([t](ChatListener& l) { l.OnReasoningDelta(t); }); };
     callbacks.onToolCallStarted = [this](const std::string& n) { Post([n](ChatListener& l) { l.OnToolCallStarted(n); }); };
 
-    auto finish = [this](ChatListener::Outcome outcome, const std::string& error) {
+    auto finish = [this, &turn](ChatListener::Outcome outcome, const std::string& error,
+                                const std::string& details = std::string()) {
         m_running = false;
+        if (outcome == ChatListener::Outcome::Failed) {
+            AppendLog("Request failed (" + turn.provider.name + ", " + turn.request.model + "): " + error +
+                      (details.empty() ? std::string() : " | " + OneLine(details, 2000)));
+            Post([error, details](ChatListener& l) { l.OnProblem(error, details); });
+        }
         Post([outcome, error](ChatListener& l) { l.OnFinished(outcome, error); });
+    };
+
+    // Compaction: summarize what came before the new messages, then go on
+    // with the summary in their place (or stop there when that is all).
+    if (turn.compactFirst || turn.compactOnly) {
+        auto& messages = turn.request.messages;
+        size_t firstNew = messages.size();
+        if (!turn.compactOnly) {
+            while (firstNew > 0 && messages[firstNew - 1].role == Role::User) firstNew--;
+        }
+        std::vector<Message> older(messages.begin(), messages.begin() + firstNew);
+        std::vector<Message> newer(messages.begin() + firstNew, messages.end());
+        Post([](ChatListener& l) { l.OnStatus("Compacting the conversation"); });
+        Message summary;
+        ChatResult failure;
+        if (!older.empty() && SummarizeConversation(*provider, turn.request.model, older, turn.compactThrough, &m_cancel,
+                                                    summary, failure)) {
+            summary.providerId = turn.provider.id;
+            summary.model = turn.request.model;
+            Message saved = summary;
+            Post([saved](ChatListener& l) mutable { l.OnMessage(saved); });
+            Message context = summary;
+            context.providerData = json();
+            messages = {context};
+            messages.insert(messages.end(), newer.begin(), newer.end());
+        } else if (m_cancel) {
+            finish(ChatListener::Outcome::Stopped, std::string());
+            return;
+        } else if (turn.compactOnly) {
+            finish(ChatListener::Outcome::Failed, "Compaction failed: " + failure.error, failure.errorDetails);
+            return;
+        } else {
+            std::string error = "Compaction failed, so the whole conversation was sent: " + failure.error;
+            std::string details = failure.errorDetails;
+            Post([error, details](ChatListener& l) { l.OnProblem(error, details); });
+        }
+        if (turn.compactOnly) {
+            finish(ChatListener::Outcome::Done, std::string());
+            return;
+        }
+    }
+
+    // Messages the user sent while this ran go in at the next step.
+    auto deliverQueued = [this, &turn]() {
+        std::vector<Message> queued = TakeQueued();
+        for (auto& m : queued) {
+            m.createdAt = NowSeconds();
+            Message copy = m;
+            Post([copy](ChatListener& l) mutable { l.OnQueuedDelivered(copy); });
+            turn.request.messages.push_back(m);
+        }
+        return !queued.empty();
     };
 
     for (int step = 0; step < std::max(1, turn.maxSteps); step++) {
@@ -193,7 +293,20 @@ void ChatRunner::RunTurn(ChatTurn turn) {
         // Only the latest screenshots go along; older ones would fill the context.
         ChatRequest sending = turn.request;
         LimitImages(sending.messages, 2);
-        ChatResult result = provider->Chat(sending, callbacks, &m_cancel);
+        // Rate limits, server errors and dropped connections are tried again,
+        // as long as nothing of the reply has arrived yet.
+        ChatResult result;
+        for (int attempt = 0;; attempt++) {
+            result = provider->Chat(sending, callbacks, &m_cancel);
+            bool arrived = !result.text.empty() || !result.reasoning.empty() || !result.toolCalls.empty();
+            if (result.ok || m_cancel || arrived || attempt >= 2 || !result.Retriable()) break;
+            int seconds = attempt == 0 ? 2 : 6;
+            AppendLog("Retrying (" + turn.provider.name + ", " + turn.request.model + "): " + result.error);
+            std::string status = "Trying again in " + std::to_string(seconds) + " seconds: " + result.error;
+            Post([status](ChatListener& l) { l.OnStatus(status); });
+            for (int i = 0; i < seconds * 10 && !m_cancel; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (m_cancel) break;
+        }
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
         AppProviderCache().SetRateLimits(turn.provider.id, result.rateLimits);
 
@@ -226,7 +339,10 @@ void ChatRunner::RunTurn(ChatTurn turn) {
                 reply.toolCalls.clear();
                 Post([reply](ChatListener& l) mutable { l.OnMessage(reply); });
             }
-            finish(ChatListener::Outcome::Failed, result.error.empty() ? "The request failed" : result.error);
+            std::string details = result.errorDetails;
+            if (details.empty()) details = "Provider: " + turn.provider.name + "\nModel: " + turn.request.model + "\n";
+            finish(ChatListener::Outcome::Failed,
+                   result.error.empty() ? "The request failed and the provider gave no reason" : result.error, details);
             return;
         }
 
@@ -234,6 +350,8 @@ void ChatRunner::RunTurn(ChatTurn turn) {
         turn.request.messages.push_back(reply);
 
         if (reply.toolCalls.empty() || !(turn.tools || turn.computer)) {
+            // A message sent meanwhile keeps the conversation going.
+            if (deliverQueued()) continue;
             if (result.stopReason == "max_tokens" || result.stopReason == "length" || result.stopReason == "MAX_TOKENS") {
                 finish(ChatListener::Outcome::Done, "The response was cut off at the output token limit.");
             } else {
@@ -282,9 +400,86 @@ void ChatRunner::RunTurn(ChatTurn turn) {
             finish(ChatListener::Outcome::Stopped, std::string());
             return;
         }
+        deliverQueued();
     }
     finish(ChatListener::Outcome::Failed,
            "Stopped after " + std::to_string(turn.maxSteps) + " tool steps. Send a message to let it continue.");
+}
+
+void ChatRunner::Enqueue(Message message) {
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    m_queue.push_back(std::move(message));
+}
+
+std::vector<Message> ChatRunner::TakeQueued() {
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    std::vector<Message> out(m_queue.begin(), m_queue.end());
+    m_queue.clear();
+    return out;
+}
+
+bool ChatRunner::CancelQueued(size_t index) {
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    if (index >= m_queue.size()) return false;
+    m_queue.erase(m_queue.begin() + static_cast<std::ptrdiff_t>(index));
+    return true;
+}
+
+// The conversation written out for summarizing: long tool output and old
+// reasoning are trimmed, so it fits even when the conversation nearly fills
+// the model's context.
+static std::string Transcript(const std::vector<Message>& messages) {
+    std::string t;
+    for (const auto& m : messages) {
+        switch (m.role) {
+            case Role::User: t += "User: " + m.content + "\n\n"; break;
+            case Role::System: t += "Earlier summary: " + m.content + "\n\n"; break;
+            case Role::Assistant:
+                if (!m.content.empty()) t += "Assistant: " + m.content + "\n\n";
+                for (const auto& c : m.toolCalls) t += "[Assistant used " + c.name + ": " + OneLine(c.arguments, 400) + "]\n";
+                break;
+            case Role::Tool:
+                t += "[Result of " + m.toolName + (m.toolError ? " (failed)" : "") + ": " +
+                     TruncateUtf8(m.content, 1500) + (m.content.size() > 1500 ? " ...]" : "]") + "\n\n";
+                break;
+        }
+    }
+    return t;
+}
+
+bool SummarizeConversation(Provider& provider, const std::string& model, const std::vector<Message>& messages,
+                           int64_t through, const std::atomic<bool>* cancel, Message& summary, ChatResult& failure) {
+    ChatRequest request;
+    request.model = model;
+    request.systemPrompt =
+        "You compact long conversations so they can continue in a fresh context. Write a summary that lets the "
+        "assistant carry on as if it remembered everything that matters: the user's goals and requests, decisions "
+        "made and why, the current state of the work (files created or changed, commands run and what they "
+        "showed, what works and what does not), problems still open, the next steps that were planned, and the "
+        "user's preferences. Keep exact names, paths, numbers and code that later work needs. Leave out chit-chat "
+        "and anything finished that no longer matters. Write plain text with short headings.";
+    request.reasoningEffort = provider.Config().kind == "anthropic" || provider.Config().kind == "gemini" ? "low" : "";
+    Message user;
+    user.role = Role::User;
+    user.content = "Here is the conversation to summarize:\n\n" + Transcript(messages) + "\nWrite the summary now.";
+    request.messages.push_back(user);
+    failure = provider.Chat(request, StreamCallbacks(), cancel);
+    if (!failure.ok || Trim(failure.text).empty()) {
+        if (failure.ok) failure.error = "The model wrote no summary";
+        return false;
+    }
+    int64_t before = 0;
+    for (const auto& m : messages) before += EstimateTokens(m.content) + EstimateTokens(m.reasoning) / 2;
+    int count = 0;
+    for (const auto& m : messages) {
+        if (GetNoteKind(m) == NoteKind::None) count++;
+    }
+    summary = MakeNote(NoteKind::Compaction, "Summary of the conversation so far:\n\n" + Trim(failure.text),
+                       {{"through", through}, {"count", count}, {"tokensBefore", before},
+                        {"tokensAfter", failure.usage.outputTokens}});
+    summary.usage = failure.usage;
+    summary.createdAt = NowSeconds();
+    return true;
 }
 
 std::string GenerateTitle(const ProviderConfig& provider, const std::string& model, const std::string& userText,

@@ -289,6 +289,11 @@ ChatResult CodexProvider::RunAgent(const AgentTurn& turn, const AgentCallbacks& 
         std::string err = Trim(SanitizeUtf8(child.Stderr()));
         result.error = err.empty() ? std::string("Codex ended without finishing") : "Codex: " + OneLine(err, 400);
     }
+    if (!result.error.empty()) {
+        std::string err = Trim(SanitizeUtf8(child.Stderr()));
+        result.errorDetails = "Program: " + program + "\nWhat it wrote to its error output:\n" +
+                              (err.empty() ? std::string("(nothing)") : TruncateUtf8(err, 4000)) + "\n";
+    }
     if (result.model.empty()) result.model = req.model;
     result.ok = result.error.empty();
     return result;

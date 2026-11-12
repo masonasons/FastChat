@@ -16,6 +16,7 @@ const EventInfo kEvents[] = {
     {"conversation_created", "Conversation created", true, false, "Created {conversation}", 440, 880, 50},
     {"title_generated", "Title generated", false, true, "Titled {conversation}", 760, 0, 30},
     {"message_deleted", "Message deleted", true, false, "Deleted", 300, 0, 40},
+    {"compacted", "Conversation compacted", true, true, "Compacted", 620, 470, 50},
 };
 
 static_assert(sizeof(kEvents) / sizeof(kEvents[0]) == static_cast<size_t>(EventId::Count),

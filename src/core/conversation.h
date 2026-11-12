@@ -131,3 +131,14 @@ const char* ConversationTypeName(ConversationType t);
 // Stored form: "chat", "code", "computer"
 const char* ConversationTypeKey(ConversationType t);
 ConversationType ConversationTypeFromKey(const std::string& key);
+
+// FastChat's own rows in a conversation, kept with the messages but not sent
+// as they are: errors and notes are never sent; a compaction summary stands in
+// for every message up to the one it names. Marked in providerData["fastchat"].
+enum class NoteKind { None, Error, Note, Compaction };
+NoteKind GetNoteKind(const Message& m);
+Message MakeNote(NoteKind kind, const std::string& content, const json& extra = json::object());
+
+// What the model is sent: the latest compaction summary (as a system message)
+// and the messages after it, without errors or notes.
+std::vector<Message> ContextMessages(const std::vector<Message>& all);

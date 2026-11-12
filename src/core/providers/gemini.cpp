@@ -200,7 +200,7 @@ ChatResult GeminiProvider::Chat(const ChatRequest& request, const StreamCallback
     if (response.cancelled || (cancel && cancel->load())) {
         result.cancelled = true;
     } else if (!response.Ok()) {
-        result.error = ErrorFromResponse(response);
+        SetHttpError(result, response, url);
         return result;
     }
     if (request.stream) sse.Finish();
@@ -209,6 +209,7 @@ ChatResult GeminiProvider::Chat(const ChatRequest& request, const StreamCallback
     if (!modelParts.empty() && !result.cancelled) result.providerData["gemini"] = {{"parts", modelParts}};
     if (!streamError.empty()) {
         result.error = streamError;
+        result.errorDetails = "Provider: " + m_config.name + "\nThe service reported this in the middle of its reply: " + streamError + "\n";
         return result;
     }
     if (result.stopReason == "SAFETY" || result.stopReason == "PROHIBITED_CONTENT" || result.stopReason == "BLOCKLIST") {

@@ -64,6 +64,7 @@ def image_placed_right(body, style):
 
 
 SEEN = ["I", " see", " the", " image."]
+FLAKY = {"count": 0}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -121,7 +122,15 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
         p = self.path
-        if p.startswith("/openai/chat/completions"):
+        if p.startswith("/flaky/chat/completions"):
+            FLAKY["count"] += 1
+            if FLAKY["count"] % 3 != 0:
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.openai(body)
+        elif p.startswith("/openai/chat/completions"):
             self.openai(body)
         elif p.startswith("/anthropic/messages"):
             self.anthropic(body)

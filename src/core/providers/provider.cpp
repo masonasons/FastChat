@@ -350,11 +350,37 @@ std::string Provider::ErrorFromResponse(const HttpResponse& response) {
         case 500: status = "Server error"; break;
         case 502: status = "Bad gateway"; break;
         case 503: status = "Service unavailable"; break;
+        case 504: status = "Gateway timed out"; break;
         case 529: status = "Overloaded"; break;
-        default: status = "HTTP " + std::to_string(response.status); break;
+        default: status = "Unexpected response"; break;
     }
-    if (message.empty()) return status;
+    status += " (HTTP " + std::to_string(response.status) + ")";
+    if (message.empty()) return status + "; the server sent no explanation";
     return status + ": " + message;
+}
+
+void Provider::SetHttpError(ChatResult& result, const HttpResponse& response, const std::string& url) const {
+    result.error = ErrorFromResponse(response);
+    std::string d = "Provider: " + m_config.name + " (" + m_kind->displayName + ")\n";
+    // The address without its query (which may carry a key).
+    d += "Address: " + url.substr(0, url.find('?')) + "\n";
+    if (response.completed) {
+        d += "HTTP status: " + std::to_string(response.status) + "\n";
+        for (const char* h : {"request-id", "x-request-id", "cf-ray", "openai-processing-ms", "retry-after"}) {
+            std::string v = response.Header(h);
+            if (!v.empty()) d += std::string(h) + ": " + v + "\n";
+        }
+        d += "Response: " + (Trim(response.body).empty() ? std::string("(empty)") : TruncateUtf8(SanitizeUtf8(response.body), 4000)) + "\n";
+    } else {
+        d += "No response arrived. " + (response.error.empty() ? std::string("No reason was given.") : response.error) + "\n";
+    }
+    result.errorDetails = d;
+}
+
+bool ChatResult::Retriable() const {
+    if (ok || cancelled) return false;
+    if (httpStatus == 0) return true;  // the connection failed or dropped
+    return httpStatus == 408 || httpStatus == 429 || httpStatus >= 500;
 }
 
 void Provider::CollectRateLimits(const HttpResponse& response, ChatResult& result) {

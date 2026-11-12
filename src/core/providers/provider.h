@@ -121,6 +121,7 @@ struct ChatResult {
     bool ok = false;
     bool cancelled = false;
     std::string error;
+    std::string errorDetails;   // for the error row: address, status, what the server sent
     int httpStatus = 0;
     std::string text;
     std::string reasoning;
@@ -131,6 +132,9 @@ struct ChatResult {
     std::string responseId;
     json providerData;          // stored on the message; see Message::providerData
     std::vector<std::pair<std::string, std::string>> rateLimits;  // header name, value
+
+    // A failure worth trying again: rate limits, server errors, dropped connections.
+    bool Retriable() const;
 };
 
 // ---------------------------------------------------------------------------
@@ -156,6 +160,11 @@ struct AgentCallbacks : StreamCallbacks {
     std::function<bool(const std::string& description, bool isCommand)> approve;
     // Plan usage or rate limits the agent reported.
     std::function<void(const std::vector<std::pair<std::string, std::string>>& limits, const std::string& summary)> onLimits;
+    // Messages the user sent meanwhile, for agents that take them while working.
+    std::function<std::vector<Message>()> takeQueued;
+    std::function<void(Message&)> onQueuedDelivered;
+    // A note for the conversation (the agent compacted its context, ...).
+    std::function<void(Message&)> onNote;
 };
 
 class Provider {
@@ -187,6 +196,8 @@ protected:
     // The service's error message from an error response, or a description of
     // the HTTP status.
     static std::string ErrorFromResponse(const HttpResponse& response);
+    // The error and its details (for the error row and the log).
+    void SetHttpError(ChatResult& result, const HttpResponse& response, const std::string& url) const;
     static void CollectRateLimits(const HttpResponse& response, ChatResult& result);
 
     ProviderConfig m_config;

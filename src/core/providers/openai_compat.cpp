@@ -269,7 +269,7 @@ ChatResult OpenAIProvider::Chat(const ChatRequest& request, const StreamCallback
     if (response.cancelled || (cancel && cancel->load())) {
         result.cancelled = true;
     } else if (!response.Ok()) {
-        result.error = ErrorFromResponse(response);
+        SetHttpError(result, response, BaseUrl() + "/chat/completions");
         return result;
     }
     if (request.stream) sse.Finish();
@@ -282,6 +282,7 @@ ChatResult OpenAIProvider::Chat(const ChatRequest& request, const StreamCallback
     if (!reasoningDetails.empty()) result.providerData["openrouter"] = {{"reasoning_details", reasoningDetails}};
     if (!streamError.empty()) {
         result.error = streamError;
+        result.errorDetails = "Provider: " + m_config.name + "\nThe service reported this in the middle of its reply: " + streamError + "\n";
         return result;
     }
     if (result.model.empty()) result.model = request.model;

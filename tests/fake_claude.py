@@ -2,19 +2,34 @@
 
 Follows the events Claude Code 2.1 sends: system/init, stream_event deltas,
 assistant messages (one per content block), user tool results, control_request
-can_use_tool (answered on stdin), rate_limit_event and result.
+can_use_tool (answered on stdin), rate_limit_event, compact_boundary and result.
 
 The prompt decides what happens: "write" asks to write a file (needs approval),
-"run" runs a command (no approval, like a safe command), anything else is a
-plain answer. --resume <id> is echoed in the answer.
+"run" runs a command (no approval, like a safe command), "/compact" compacts,
+anything else is a plain answer. --resume <id> is echoed in the answer.
+Messages that arrive on stdin after the first result are answered as further
+turns ("Got: ..."), as Claude Code does with messages sent while it works.
 """
 import json
+import queue
 import sys
+import threading
 
 args = sys.argv[1:]
 resume = args[args.index("--resume") + 1] if "--resume" in args else None
 no_tools = "--tools" in args and args[args.index("--tools") + 1] == ""
 session = resume or "sess-1"
+
+lines = queue.Queue()
+
+
+def reader():
+    for line in sys.stdin:
+        lines.put(line)
+    lines.put(None)
+
+
+threading.Thread(target=reader, daemon=True).start()
 
 
 def out(obj):
@@ -43,20 +58,34 @@ def result(cost):
          "usage": {"input_tokens": 6, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50, "output_tokens": 20}})
 
 
-first = json.loads(sys.stdin.readline())
+def next_message(timeout=None):
+    try:
+        line = lines.get(timeout=timeout)
+    except queue.Empty:
+        return "timeout"
+    return None if line is None else json.loads(line)
+
+
+first = next_message()
 prompt = first["message"]["content"]
 out({"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku-5-5",
      "tools": [] if no_tools else ["Bash", "Write"], "cwd": "."})
 out({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
     "seven_day": {"utilization": 0.25, "resetsAt": 1794499200, "status": "allowed"}}}, "session_id": session})
 
-if "write" in prompt and not no_tools:
+if prompt == "/compact":
+    out({"type": "system", "subtype": "compact_boundary", "session_id": session,
+         "compact_metadata": {"trigger": "manual", "pre_tokens": 31948, "post_tokens": 6933}})
+    out({"type": "user", "message": {"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"},
+         "parent_tool_use_id": None, "session_id": session})
+    result(0.005)
+elif "write" in prompt and not no_tools:
     assistant("msg_1", {"type": "thinking", "thinking": "I will write it."})
     assistant("msg_1", {"type": "tool_use", "id": "toolu_1", "name": "Write",
                         "input": {"file_path": "notes.txt", "content": "hello"}})
     out({"type": "control_request", "request_id": "req-1", "request": {"subtype": "can_use_tool", "tool_name": "Write",
          "input": {"file_path": "notes.txt", "content": "hello"}, "tool_use_id": "toolu_1"}})
-    answer = json.loads(sys.stdin.readline())
+    answer = next_message()
     behavior = answer["response"]["response"]["behavior"]
     if behavior == "allow":
         out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1",
@@ -68,6 +97,7 @@ if "write" in prompt and not no_tools:
         text = "You declined."
     stream_text(text)
     assistant("msg_2", {"type": "text", "text": text})
+    result(0.0125)
 elif "run" in prompt and not no_tools:
     assistant("msg_1", {"type": "tool_use", "id": "toolu_2", "name": "Bash", "input": {"command": "echo hi"}})
     out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_2",
@@ -77,10 +107,23 @@ elif "run" in prompt and not no_tools:
          "parent_tool_use_id": "toolu_2"})
     stream_text("It printed hi.")
     assistant("msg_2", {"type": "text", "text": "It printed hi."})
+    result(0.0125)
 else:
     text = "Hello from fake Claude." + (" Resumed " + resume + "." if resume else "")
     stream_text(text)
     assistant("msg_1", {"type": "text", "text": text})
-result(0.0125)
-# Like Claude Code, wait for standard input to close.
-sys.stdin.read()
+    result(0.0125)
+
+# Messages sent while it worked: each is another turn. Ends when stdin closes.
+turn = 3
+while True:
+    msg = next_message(timeout=10)
+    if msg is None or msg == "timeout":
+        break
+    if msg.get("type") != "user":
+        continue
+    text = "Got: " + msg["message"]["content"]
+    stream_text(text)
+    assistant("msg_%d" % turn, {"type": "text", "text": text})
+    result(0.001)
+    turn += 1

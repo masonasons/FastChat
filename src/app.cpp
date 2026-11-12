@@ -95,6 +95,15 @@ public:
         return true;
     }
 
+    // Ctrl, pressed anywhere in FastChat, silences speech (as it does a screen reader).
+    int FilterEvent(wxEvent& event) override {
+        if (event.GetEventType() == wxEVT_KEY_DOWN && AppSettings().speech.ctrlStops) {
+            int key = static_cast<wxKeyEvent&>(event).GetKeyCode();
+            if (key == WXK_CONTROL || key == WXK_RAW_CONTROL) AppSpeech().Stop();
+        }
+        return Event_Skip;
+    }
+
     void OnUnhandledException() override {
         AppendLog("Unhandled exception outside the main loop");
     }

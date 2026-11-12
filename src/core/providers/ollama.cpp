@@ -158,13 +158,14 @@ ChatResult OllamaProvider::Chat(const ChatRequest& request, const StreamCallback
     if (response.cancelled || (cancel && cancel->load())) {
         result.cancelled = true;
     } else if (!response.Ok()) {
-        result.error = ErrorFromResponse(response);
+        SetHttpError(result, response, BaseUrl() + "/api/chat");
         return result;
     }
     if (request.stream) parser.Finish();
     else handleLine(ParseJsonOrEmpty(response.body));
     if (!streamError.empty()) {
         result.error = streamError;
+        result.errorDetails = "Provider: " + m_config.name + "\nThe service reported this in the middle of its reply: " + streamError + "\n";
         return result;
     }
     if (result.model.empty()) result.model = request.model;

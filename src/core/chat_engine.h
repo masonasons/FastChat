@@ -10,6 +10,7 @@
 #include "core/providers/provider.h"
 
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <future>
 #include <memory>
@@ -34,6 +35,13 @@ public:
     virtual void OnApproveCommand(const std::string& what, bool isCommand, std::function<void(bool)> answer) = 0;
     enum class Outcome { Done, Stopped, Failed };
     virtual void OnFinished(Outcome outcome, const std::string& error) = 0;
+    // What it is doing now ("Trying again in 2 seconds...").
+    virtual void OnStatus(const std::string& text) { (void)text; }
+    // A failure, with its details, before OnFinished (or on its own when the
+    // turn carries on, as after a failed compaction).
+    virtual void OnProblem(const std::string& error, const std::string& details) { (void)error; (void)details; }
+    // A message the user sent while it ran has now gone to the model.
+    virtual void OnQueuedDelivered(Message& message) { OnMessage(message); }
 };
 
 struct ChatTurn {
@@ -44,6 +52,11 @@ struct ChatTurn {
     bool vision = true;           // the model can see images (computer use sends screenshots)
     ToolContext toolContext;      // also the approval setting for computer use
     int maxSteps = 50;
+    // Compaction: summarize the history first (compactFirst), or only that
+    // (compactOnly). The summary covers messages up to compactThrough (an id).
+    bool compactFirst = false;
+    bool compactOnly = false;
+    int64_t compactThrough = 0;
 };
 
 class ChatRunner : public std::enable_shared_from_this<ChatRunner> {
@@ -57,6 +70,11 @@ public:
     void Stop();
     bool Running() const { return m_running.load(); }
 
+    // Messages sent while it runs; they go to the model at its next step.
+    void Enqueue(Message message);
+    std::vector<Message> TakeQueued();
+    bool CancelQueued(size_t index);  // false if it already went
+
 private:
     void Run(ChatTurn turn);
     void RunTurn(ChatTurn turn);
@@ -69,7 +87,14 @@ private:
     std::thread m_thread;
     std::atomic<bool> m_cancel{false};
     std::atomic<bool> m_running{false};
+    std::mutex m_queueMutex;
+    std::deque<Message> m_queue;
 };
+
+// Summarize `messages` into a compaction note covering up to `through`.
+// On failure, `failure` holds the error. Blocking.
+bool SummarizeConversation(Provider& provider, const std::string& model, const std::vector<Message>& messages,
+                           int64_t through, const std::atomic<bool>* cancel, Message& summary, ChatResult& failure);
 
 // Keep the images of only the last `keep` messages that have any.
 void LimitImages(std::vector<Message>& messages, int keep);

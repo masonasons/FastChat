@@ -250,7 +250,7 @@ ChatResult AnthropicProvider::Chat(const ChatRequest& request, const StreamCallb
     if (response.cancelled || (cancel && cancel->load())) {
         result.cancelled = true;
     } else if (!response.Ok()) {
-        result.error = ErrorFromResponse(response);
+        SetHttpError(result, response, BaseUrl() + "/messages");
         return result;
     }
 
@@ -294,6 +294,7 @@ ChatResult AnthropicProvider::Chat(const ChatRequest& request, const StreamCallb
 
     if (!streamError.empty()) {
         result.error = streamError;
+        result.errorDetails = "Provider: " + m_config.name + "\nThe service reported this in the middle of its reply: " + streamError + "\n";
         return result;
     }
     if (result.stopReason == "refusal") {

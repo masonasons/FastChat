@@ -244,6 +244,15 @@ struct TestListener : ChatListener {
     }
     std::vector<std::string> approvals;
     bool approve = true;
+    std::vector<std::pair<std::string, std::string>> problems;
+    std::vector<std::string> statuses;
+    int delivered = 0;
+    void OnProblem(const std::string& e, const std::string& d) override { problems.emplace_back(e, d); }
+    void OnStatus(const std::string& s) override { statuses.push_back(s); }
+    void OnQueuedDelivered(Message& m) override {
+        delivered++;
+        OnMessage(m);
+    }
     void OnFinished(Outcome o, const std::string& e) override {
         finished = true;
         outcome = o;
@@ -323,6 +332,144 @@ static void TestProvider(const std::string& base, const std::string& kind, const
         CHECK_EQ(loop.messages[2].content, std::string("Hello world. This is the second sentence."));
     }
     CHECK_EQ(loop.tools.size(), size_t{1});
+}
+
+// Any turn, driven to the end; `afterStart` runs right after it starts (to queue messages).
+static TestListener Drive(ChatTurn turn, std::function<void(ChatRunner&)> afterStart = nullptr) {
+    std::mutex mutex;
+    std::deque<std::function<void()>> queue;
+    auto runner = std::make_shared<ChatRunner>([&](std::function<void()> fn) {
+        std::lock_guard<std::mutex> lock(mutex);
+        queue.push_back(std::move(fn));
+    });
+    TestListener listener;
+    runner->SetListener(&listener);
+    runner->Start(turn);
+    if (afterStart) afterStart(*runner);
+    for (int i = 0; i < 6000 && !listener.finished; i++) {
+        std::deque<std::function<void()>> work;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            work.swap(queue);
+        }
+        for (auto& fn : work) fn();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    runner->SetListener(nullptr);
+    return listener;
+}
+
+static Message UserMessage(const std::string& text, int64_t id = 0) {
+    Message m;
+    m.role = Role::User;
+    m.content = text;
+    m.id = id;
+    return m;
+}
+
+// Messages sent while it works, retries, error details, compaction.
+static void TestQueueRetryCompaction(const std::string& base, const std::string& root) {
+    std::cout << "Queue, retries, errors, compaction:\n";
+    ProviderConfig mock = MockProvider(base, "openrouter", "/openai");
+
+    // A plain answer, with a message queued meanwhile: answered as the next step.
+    ChatTurn chat;
+    chat.provider = mock;
+    chat.request.model = "mock-model";
+    chat.request.messages = {UserMessage("First")};
+    TestListener q = Drive(chat, [](ChatRunner& r) { r.Enqueue(UserMessage("And another thing")); });
+    CHECK(q.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(q.delivered, 1);
+    CHECK_EQ(q.messages.size(), size_t{3});  // answer, the queued message, its answer
+    if (q.messages.size() == 3) {
+        CHECK(q.messages[0].role == Role::Assistant);
+        CHECK(q.messages[1].role == Role::User && q.messages[1].content == "And another thing");
+        CHECK(q.messages[2].role == Role::Assistant);
+    }
+    std::cout << "  queued during a chat: " << q.messages.size() << " messages\n";
+
+    // In a tool loop it goes in after the tool results.
+    ChatTurn tools = chat;
+    tools.tools = true;
+    tools.toolContext.root = root;
+    tools.toolContext.commandApproval = "auto";
+    TestListener qt = Drive(tools, [](ChatRunner& r) { r.Enqueue(UserMessage("Also check the tests")); });
+    CHECK(qt.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(qt.messages.size(), size_t{4});  // call, result, queued message, answer
+    if (qt.messages.size() == 4) {
+        CHECK(qt.messages[1].role == Role::Tool);
+        CHECK(qt.messages[2].role == Role::User);
+        CHECK(qt.messages[3].role == Role::Assistant && qt.messages[3].toolCalls.empty());
+    }
+
+    // Two 503s, then an answer: retried, with the wait reported.
+    ChatTurn flaky = chat;
+    flaky.provider = MockProvider(base, "openrouter", "/flaky");
+    TestListener f = Drive(flaky);
+    CHECK(f.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(f.statuses.size(), size_t{2});
+    if (!f.statuses.empty()) CHECK(f.statuses[0].find("Trying again") != std::string::npos);
+    std::cout << "  retries: " << (f.statuses.empty() ? std::string("none") : f.statuses[0]) << "\n";
+
+    // A failure explains itself.
+    ChatTurn bad = chat;
+    bad.request.model = "fail";
+    TestListener b = Drive(bad);
+    CHECK(b.outcome == ChatListener::Outcome::Failed);
+    CHECK_EQ(b.problems.size(), size_t{1});
+    if (!b.problems.empty()) {
+        CHECK(b.problems[0].first.find("HTTP 400") != std::string::npos);
+        CHECK(b.problems[0].second.find("HTTP status: 400") != std::string::npos);
+        CHECK(b.problems[0].second.find("does not exist") != std::string::npos);
+        std::cout << "  error: " << b.problems[0].first << "\n";
+    }
+
+    // Compaction on request: a summary note covering everything so far.
+    ChatTurn compact = chat;
+    Message a1;
+    a1.role = Role::Assistant;
+    a1.content = "Hi";
+    a1.id = 2;
+    compact.request.messages = {UserMessage("Hello", 1), a1, UserMessage("Tell me more", 3)};
+    compact.compactOnly = true;
+    compact.compactThrough = 3;
+    TestListener c = Drive(compact);
+    CHECK(c.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(c.messages.size(), size_t{1});
+    if (c.messages.size() == 1) {
+        CHECK(GetNoteKind(c.messages[0]) == NoteKind::Compaction);
+        CHECK(c.messages[0].content.find("Summary of the conversation so far") != std::string::npos);
+        CHECK_EQ(c.messages[0].providerData["fastchat"].value("through", int64_t{0}), int64_t{3});
+        // What gets sent afterwards: the summary, then what came after it.
+        std::vector<Message> all = compact.request.messages;
+        Message summary = c.messages[0];
+        summary.id = 4;
+        all.push_back(summary);
+        all.push_back(UserMessage("Next", 5));
+        Message err = MakeNote(NoteKind::Error, "boom");
+        err.id = 6;
+        all.push_back(err);
+        auto context = ContextMessages(all);
+        CHECK_EQ(context.size(), size_t{2});
+        if (context.size() == 2) {
+            CHECK(context[0].role == Role::System && context[0].providerData.is_null());
+            CHECK_EQ(context[1].content, std::string("Next"));
+        }
+    }
+    // Automatic: compact first, then answer the new message.
+    ChatTurn first = compact;
+    first.compactOnly = false;
+    first.compactFirst = true;
+    first.compactThrough = 2;
+    TestListener cf = Drive(first);
+    CHECK(cf.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(cf.messages.size(), size_t{2});  // the summary, the answer
+    if (cf.messages.size() == 2) {
+        CHECK(GetNoteKind(cf.messages[0]) == NoteKind::Compaction);
+        CHECK(cf.messages[1].role == Role::Assistant);
+    }
+    std::cout << "  compaction: summary of " << (c.messages.empty() ? 0 : c.messages[0].providerData["fastchat"].value("count", 0))
+              << " messages\n";
 }
 
 // A turn with a coding agent (fake Claude Code / Codex), driven to the end.
@@ -457,6 +604,38 @@ static void TestAgents(const std::string& root) {
     CHECK(cxChat.outcome == ChatListener::Outcome::Done);
     CHECK(cxChat.text.find("Resumed thread-1") != std::string::npos);
     CHECK(cxChat.messages.size() == 1 && cxChat.messages[0].reasoning == "sandbox=read-only");
+
+    std::cout << "  claude code: message sent while it works\n";
+    ChatTurn live;
+    live.provider = claude;
+    live.request.model = "haiku";
+    live.request.messages = {UserMessage("Hello there")};
+    TestListener lq = Drive(live, [](ChatRunner& r) { r.Enqueue(UserMessage("One more thing")); });
+    CHECK(lq.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(lq.delivered, 1);
+    bool gotIt = false;
+    for (const auto& m : lq.messages) gotIt = gotIt || m.content == "Got: One more thing";
+    CHECK(gotIt);
+
+    std::cout << "  claude code: /compact\n";
+    ChatTurn cc = live;
+    cc.request.messages = {UserMessage("/compact")};
+    TestListener ccr = Drive(cc);
+    CHECK(ccr.outcome == ChatListener::Outcome::Done);
+    bool noted = false;
+    for (const auto& m : ccr.messages) {
+        if (GetNoteKind(m) == NoteKind::Note && m.content.find("31.9K tokens down to 6.9K") != std::string::npos) noted = true;
+    }
+    CHECK(noted);
+
+    std::cout << "  codex: message sent while it works\n";
+    ChatTurn cxq;
+    cxq.provider = codex;
+    cxq.request.messages = {UserMessage("Thanks")};
+    TestListener cxl = Drive(cxq, [](ChatRunner& r) { r.Enqueue(UserMessage("And again")); });
+    CHECK(cxl.outcome == ChatListener::Outcome::Done);
+    CHECK_EQ(cxl.delivered, 1);
+    CHECK(!cxl.messages.empty() && cxl.messages.back().content.find("Resumed thread-1") != std::string::npos);
 }
 
 // A screenshot in a tool result reaches each API where it wants it (the mock
@@ -759,6 +938,7 @@ int main() {
         TestProvider(mock, "gemini", "/gemini", "gemini-mock", root);
         TestProvider(mock, "ollama", "/ollama", "mock:latest", root);
         TestImageRequests(mock);
+        TestQueueRetryCompaction(mock, JoinPath(dir, "project"));
 
         // OpenRouter's account details
         auto p = CreateProvider(MockProvider(mock, "openrouter", "/openai"));
