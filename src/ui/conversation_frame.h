@@ -6,6 +6,9 @@
 #include "core/chat_engine.h"
 #include "core/conversation.h"
 #include "core/notify.h"
+#include "ui/activity_window.h"
+
+#include <wx/weakref.h>
 
 #include <wx/wx.h>
 
@@ -39,6 +42,7 @@ public:
     void OnStatus(const std::string& text) override;
     void OnProblem(const std::string& error, const std::string& details) override;
     void OnQueuedDelivered(Message& message) override;
+    void OnActivity(const ActivityEvent& event) override;
 
 private:
     void BuildMenuIds();
@@ -57,6 +61,7 @@ private:
     void Send();
     bool StartTurn(bool compactOnly = false);
     void Compact();
+    void ShowActivity();
     bool TakeBackQueued(int row);
     // Messages queued too late for a turn: sent next, or given back after a stop.
     void HandleLeftover(Outcome outcome, std::vector<Message>& leftover);
@@ -133,6 +138,8 @@ private:
     bool m_autoApprove = false;
     bool m_compacting = false;
     std::vector<std::string> m_queued;  // messages sent while it works, not yet taken
+    std::vector<Activity> m_activities; // subagents, shells and tools, this session
+    wxWeakRef<ActivityWindow> m_activityWindow;
     bool m_stopHotkey = false;
     bool m_silentClose = false;
     int64_t m_lastCreditsCheck = 0;

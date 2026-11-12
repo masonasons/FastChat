@@ -21,6 +21,8 @@ enum class EventId {
     TitleGenerated,
     MessageDeleted,
     Compacted,           // the conversation was summarized to save context
+    TaskStarted,         // a subagent or background shell started
+    TaskFinished,        // ...and ended
     Count
 };
 

@@ -42,6 +42,8 @@ public:
     virtual void OnProblem(const std::string& error, const std::string& details) { (void)error; (void)details; }
     // A message the user sent while it ran has now gone to the model.
     virtual void OnQueuedDelivered(Message& message) { OnMessage(message); }
+    // A subagent, background shell or tool started, progressed or ended.
+    virtual void OnActivity(const ActivityEvent& event) { (void)event; }
 };
 
 struct ChatTurn {

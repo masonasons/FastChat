@@ -215,6 +215,7 @@ set(FASTCHAT_SOURCES
     src/ui/event_settings_panel.cpp
     src/ui/model_picker.cpp
     src/ui/text_view_dialog.cpp
+    src/ui/activity_window.cpp
 )
 if(WIN32)
     list(APPEND FASTCHAT_SOURCES res/fastchat.rc)

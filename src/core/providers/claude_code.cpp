@@ -197,6 +197,24 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
     std::string pendingId;
     bool hasPending = false;
     std::map<std::string, std::pair<std::string, json>> calls;  // tool_use id -> name, input
+    // Subagents: the tool call that started each (its id is their messages'
+    // parent_tool_use_id), what it was described as, and which agent each of
+    // their own tool calls belongs to.
+    std::map<std::string, std::string> agentTask;   // starting tool_use id -> task id
+    std::map<std::string, std::string> agentName;   // starting tool_use id -> description
+    std::map<std::string, std::string> subCallOwner;  // a subagent's tool_use id -> starting tool_use id
+    std::map<std::string, std::string> subCallName;   // a subagent's tool_use id -> description of the call
+    auto activity = [&](ActivityEvent e) {
+        if (callbacks.onActivity) callbacks.onActivity(e);
+    };
+    auto agentLine = [&](const std::string& parent, const std::string& line) {
+        ActivityEvent e;
+        auto task = agentTask.find(parent);
+        e.id = task != agentTask.end() ? task->second : parent;
+        e.toolUseId = parent;
+        e.line = line;
+        activity(e);
+    };
     bool gotResult = false;
 
     auto flush = [&]() {
@@ -262,6 +280,41 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         if (type == "system" && Str(ev, "subtype") == "init") {
             session = Str(ev, "session_id");
             result.model = Str(ev, "model");
+        } else if (type == "system" && (Str(ev, "subtype") == "task_started" || Str(ev, "subtype") == "task_progress" ||
+                                        Str(ev, "subtype") == "task_updated" || Str(ev, "subtype") == "task_notification")) {
+            // Subagents and background shells.
+            std::string subtype = Str(ev, "subtype");
+            ActivityEvent e;
+            e.id = Str(ev, "task_id");
+            e.toolUseId = Str(ev, "tool_use_id");
+            if (subtype == "task_started") {
+                std::string taskType = Str(ev, "task_type");
+                e.kind = taskType == "local_agent" ? "agent" : taskType == "local_bash" ? "shell" : taskType;
+                e.description = Str(ev, "description");
+                e.agentType = Str(ev, "subagent_type");
+                e.prompt = Str(ev, "prompt");
+                e.background = ev.value("is_backgrounded", false);
+                e.status = "running";
+                if (!e.toolUseId.empty()) {
+                    agentTask[e.toolUseId] = e.id;
+                    agentName[e.toolUseId] = e.description;
+                }
+            } else if (subtype == "task_progress") {
+                e.progress = Str(ev, "description");
+                e.lastTool = Str(ev, "last_tool_name");
+                const json& u = ev.value("usage", json::object());
+                e.tokens = u.value("total_tokens", int64_t{-1});
+                e.toolUses = u.value("tool_uses", int64_t{-1});
+                e.durationMs = u.value("duration_ms", int64_t{-1});
+            } else if (subtype == "task_updated") {
+                const json& patch = ev.value("patch", json::object());
+                e.status = Str(patch, "status");
+            } else {
+                e.status = Str(ev, "status");
+                e.outputFile = Str(ev, "output_file");
+                e.summary = Str(ev, "summary");
+            }
+            activity(e);
         } else if (type == "system" && Str(ev, "subtype") == "compact_boundary") {
             // Claude Code compacted its context (asked with /compact, or by itself).
             const json& meta = ev.value("compact_metadata", json::object());
@@ -282,6 +335,29 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 std::string dtype = Str(d, "type");
                 if (dtype == "text_delta" && callbacks.onText) callbacks.onText(Str(d, "text"));
                 if (dtype == "thinking_delta" && callbacks.onReasoning) callbacks.onReasoning(Str(d, "thinking"));
+            }
+        } else if (type == "assistant" && !topLevel) {
+            std::string parent = Str(ev, "parent_tool_use_id");
+            for (const auto& block : ev.value("message", json::object()).value("content", json::array())) {
+                std::string btype = Str(block, "type");
+                if (btype == "tool_use") {
+                    std::string what = Describe(Str(block, "name"), block.value("input", json::object()), folder);
+                    subCallOwner[Str(block, "id")] = parent;
+                    subCallName[Str(block, "id")] = what;
+                    agentLine(parent, what);
+                } else if (btype == "text" && !Trim(Str(block, "text")).empty()) {
+                    agentLine(parent, "Says: " + Str(block, "text"));
+                }
+            }
+        } else if (type == "user" && !topLevel) {
+            std::string parent = Str(ev, "parent_tool_use_id");
+            const json& content = ev.value("message", json::object()).value("content", json());
+            if (content.is_array()) {
+                for (const auto& block : content) {
+                    if (Str(block, "type") != "tool_result") continue;
+                    std::string text = OneLine(ResultText(block.value("content", json())), 300);
+                    agentLine(parent, std::string(block.value("is_error", false) ? "Failed: " : "Result: ") + text);
+                }
             }
         } else if (type == "assistant" && topLevel) {
             const json& msg = ev.value("message", json::object());
@@ -325,6 +401,18 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 tool.toolError = block.value("is_error", false);
                 std::string description = call != calls.end() ? Describe(call->second.first, call->second.second, folder)
                                                               : tool.toolName;
+                // A command sent to the background: where its output goes.
+                if (const json& extra = ev.value("tool_use_result", json()); extra.is_object() && extra.contains("backgroundTaskId")) {
+                    ActivityEvent e;
+                    e.id = Str(extra, "backgroundTaskId");
+                    size_t at = tool.content.find("Output is being written to: ");
+                    if (at != std::string::npos) {
+                        std::string path = tool.content.substr(at + 28);
+                        e.outputFile = Trim(path.substr(0, path.find_first_of("\r\n")));
+                    }
+                    if (call != calls.end()) e.prompt = Str(call->second.second, "command");
+                    activity(e);
+                }
                 tool.reasoning = description + (tool.toolError ? " (failed)" : "");
                 if (callbacks.onMessage) callbacks.onMessage(tool);
             }
@@ -336,10 +424,17 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 std::string tool = Str(request, "tool_name");
                 json input = request.value("input", json::object());
                 bool allow = false;
+                std::string what = IsCommandTool(tool) ? Str(input, "command") : Describe(tool, input, folder);
+                // A subagent's request says which agent asks.
+                auto owner = subCallOwner.find(Str(request, "tool_use_id"));
+                if (owner != subCallOwner.end()) {
+                    auto name = agentName.find(owner->second);
+                    std::string agent = name != agentName.end() ? name->second : std::string("a subagent");
+                    what = "Agent '" + agent + "' wants to: " + Describe(tool, input, folder);
+                }
                 if (turn.approval == "auto") allow = true;
                 else if (turn.approval != "deny" && callbacks.approve) {
-                    allow = callbacks.approve(IsCommandTool(tool) ? Str(input, "command") : Describe(tool, input, folder),
-                                              IsCommandTool(tool));
+                    allow = callbacks.approve(what, IsCommandTool(tool) && owner == subCallOwner.end());
                 }
                 if (allow) respond(requestId, {{"behavior", "allow"}, {"updatedInput", input}});
                 else respond(requestId, {{"behavior", "deny"}, {"message", "The user declined this. Ask them how to proceed."}});

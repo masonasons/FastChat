@@ -28,6 +28,7 @@ enum {
     ID_EXPORT,
     ID_CLEAR,
     ID_COMPACT,
+    ID_ACTIVITY,
     ID_OPEN_FOLDER,
     ID_ACCOUNT,
     ID_CLOSE,
@@ -97,6 +98,7 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
         {wxACCEL_CTRL, 'W', ID_CLOSE},
         {wxACCEL_NORMAL, WXK_F6, ID_FOCUS_LIST},
         {wxACCEL_CTRL, 'K', ID_COMPACT},
+        {wxACCEL_CTRL, 'T', ID_ACTIVITY},
     };
     SetAcceleratorTable(wxAcceleratorTable(static_cast<int>(sizeof(accel) / sizeof(accel[0])), accel));
 
@@ -772,6 +774,78 @@ void ConversationFrame::OnQueuedDelivered(Message& message) {
     OnMessage(message);
 }
 
+void ConversationFrame::OnActivity(const ActivityEvent& e) {
+    // Find it by id, or by the tool call that started it.
+    Activity* a = nullptr;
+    for (auto& existing : m_activities) {
+        if ((!e.id.empty() && existing.info.id == e.id) ||
+            (e.id.empty() && !e.toolUseId.empty() && existing.info.toolUseId == e.toolUseId)) {
+            a = &existing;
+            break;
+        }
+    }
+    bool isNew = !a;
+    if (isNew) {
+        m_activities.emplace_back();
+        a = &m_activities.back();
+        a->startedMs = NowMillis();
+    }
+    bool wasRunning = a->Running();
+    ActivityEvent& i = a->info;
+    auto take = [](std::string& field, const std::string& value) {
+        if (!value.empty()) field = value;
+    };
+    take(i.id, e.id);
+    take(i.toolUseId, e.toolUseId);
+    take(i.kind, e.kind);
+    take(i.description, e.description);
+    take(i.status, e.status);
+    take(i.agentType, e.agentType);
+    take(i.prompt, e.prompt);
+    take(i.progress, e.progress);
+    take(i.lastTool, e.lastTool);
+    take(i.outputFile, e.outputFile);
+    take(i.summary, e.summary);
+    if (e.tokens >= 0) i.tokens = e.tokens;
+    if (e.toolUses >= 0) i.toolUses = e.toolUses;
+    if (e.durationMs >= 0) i.durationMs = e.durationMs;
+    if (e.background) i.background = true;
+    if (!e.line.empty()) a->lines.push_back(e.line);
+
+    // Agents and shells are worth hearing about; single tool runs are not.
+    bool notable = i.kind == "agent" || (i.kind == "shell" && i.background);
+    if (isNew && notable && a->Running()) {
+        EventContext ctx = MakeContext();
+        ctx.Set("tool", ActivityTitle(*a));
+        NotifyEvent(EventId::TaskStarted, ctx, &m_conv.settings);
+    }
+    if (wasRunning && !a->Running()) {
+        a->endedMs = NowMillis();
+        if (notable) {
+            EventContext ctx = MakeContext();
+            ctx.Set("tool", ActivityTitle(*a)).Set("summary", i.status);
+            NotifyEvent(EventId::TaskFinished, ctx, &m_conv.settings);
+        }
+    }
+    // The waiting row shows a working subagent's current step.
+    if (i.kind == "agent" && a->Running() && !i.progress.empty()) {
+        m_runningTool = ActivityTitle(*a) + ": " + i.progress;
+        SetPendingRow(true);
+    }
+    if (m_activityWindow) m_activityWindow->Update(false);
+}
+
+void ConversationFrame::ShowActivity() {
+    if (m_activityWindow) {
+        m_activityWindow->Raise();
+        m_activityWindow->Show();
+        return;
+    }
+    std::string title = m_conv.title.empty() ? std::string("untitled") : m_conv.title;
+    m_activityWindow = new ActivityWindow(this, U(title), [this]() -> const std::vector<Activity>& { return m_activities; });
+    m_activityWindow->Show();
+}
+
 void ConversationFrame::OnStatus(const std::string& text) {
     SetStatus(U(text));
     SetPendingRow(true);
@@ -1040,6 +1114,7 @@ void ConversationFrame::OnCommand(wxCommandEvent& e) {
         case ID_EXPORT: Export(); break;
         case ID_CLEAR: ClearMessages(); break;
         case ID_COMPACT: Compact(); break;
+        case ID_ACTIVITY: ShowActivity(); break;
         case ID_OPEN_FOLDER:
             if (!m_conv.folder.empty()) OpenWithSystem(m_conv.folder);
             break;
@@ -1087,6 +1162,7 @@ void ConversationFrame::ShowActions() {
     menu.Append(ID_CHAT_SETTINGS, "Conversation &settings...\tCtrl+Shift+,");
     menu.Append(ID_REGENERATE, "&Regenerate the last response\tCtrl+R");
     menu.Append(ID_COMPACT, "Com&pact the conversation\tCtrl+K");
+    menu.Append(ID_ACTIVITY, "Running &tools and agents...\tCtrl+T");
     menu.AppendSeparator();
     menu.Append(ID_SPEAK_LAST, "S&peak the last response\tCtrl+Shift+R");
     menu.Append(ID_STOP_SPEECH, "Stop spea&king\tCtrl+Shift+S");

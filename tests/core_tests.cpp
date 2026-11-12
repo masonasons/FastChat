@@ -247,6 +247,8 @@ struct TestListener : ChatListener {
     std::vector<std::pair<std::string, std::string>> problems;
     std::vector<std::string> statuses;
     int delivered = 0;
+    std::vector<ActivityEvent> activities;
+    void OnActivity(const ActivityEvent& e) override { activities.push_back(e); }
     void OnProblem(const std::string& e, const std::string& d) override { problems.emplace_back(e, d); }
     void OnStatus(const std::string& s) override { statuses.push_back(s); }
     void OnQueuedDelivered(Message& m) override {
@@ -396,6 +398,9 @@ static void TestQueueRetryCompaction(const std::string& base, const std::string&
     TestListener qt = Drive(tools, [](ChatRunner& r) { r.Enqueue(UserMessage("Also check the tests")); });
     CHECK(qt.outcome == ChatListener::Outcome::Done);
     CHECK_EQ(qt.messages.size(), size_t{4});  // call, result, queued message, answer
+    bool toolActivity = false;
+    for (const auto& e : qt.activities) toolActivity = toolActivity || (e.status == "completed" && e.durationMs >= 0);
+    CHECK(toolActivity);
     if (qt.messages.size() == 4) {
         CHECK(qt.messages[1].role == Role::Tool);
         CHECK(qt.messages[2].role == Role::User);
@@ -616,6 +621,39 @@ static void TestAgents(const std::string& root) {
     bool gotIt = false;
     for (const auto& m : lq.messages) gotIt = gotIt || m.content == "Got: One more thing";
     CHECK(gotIt);
+
+    std::cout << "  claude code: subagent and background shell\n";
+    ChatTurn agentTurn = live;
+    agentTurn.tools = true;
+    agentTurn.toolContext.root = root;
+    agentTurn.toolContext.commandApproval = "ask";
+    agentTurn.request.messages = {UserMessage("Start an agent and a background ping")};
+    TestListener ag = Drive(agentTurn);
+    CHECK(ag.outcome == ChatListener::Outcome::Done);
+    // Its approval names the subagent asking.
+    CHECK_EQ(ag.approvals.size(), size_t{1});
+    if (!ag.approvals.empty()) CHECK_EQ(ag.approvals[0], std::string("Agent 'count files' wants to: Run: dir /b"));
+    // The subagent's own words stay out of the conversation...
+    for (const auto& m : ag.messages) CHECK(m.content.find("SUBAGENT") == std::string::npos);
+    // ...and go to its activity, with its start, progress and end.
+    bool started = false, progressed = false, ended = false, stepped = false, said = false, shellFile = false, shellDone = false;
+    for (const auto& e : ag.activities) {
+        if (e.id == "ag1" && e.kind == "agent" && e.status == "running" && e.description == "count files") started = true;
+        if (e.id == "ag1" && e.toolUses == 1 && e.progress == "Running dir /b") progressed = true;
+        if (e.id == "ag1" && e.status == "completed") ended = true;
+        if (e.id == "ag1" && e.line == "Run: dir /b") stepped = true;
+        if (e.id == "ag1" && e.line == "Says: SUBAGENT: two files") said = true;
+        if (e.id == "bg1" && !e.outputFile.empty() && e.prompt == "ping -n 6 127.0.0.1") shellFile = true;
+        if (e.id == "bg1" && e.status == "completed") shellDone = true;
+    }
+    CHECK(started);
+    CHECK(progressed);
+    CHECK(ended);
+    CHECK(stepped);
+    CHECK(said);
+    CHECK(shellFile);
+    CHECK(shellDone);
+    std::cout << "    " << ag.activities.size() << " activity events\n";
 
     std::cout << "  claude code: /compact\n";
     ChatTurn cc = live;

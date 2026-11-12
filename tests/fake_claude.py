@@ -79,6 +79,46 @@ if prompt == "/compact":
     out({"type": "user", "message": {"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"},
          "parent_tool_use_id": None, "session_id": session})
     result(0.005)
+elif "agent" in prompt and not no_tools:
+    # A background shell and a subagent, as Claude Code 2.1 reports them.
+    import os, tempfile
+    out_file = os.path.join(tempfile.gettempdir(), "fastchat-fake-task.output")
+    with open(out_file, "w") as f:
+        f.write("Pinging 127.0.0.1\nReply from 127.0.0.1\n")
+    assistant("msg_1", {"type": "tool_use", "id": "toolu_bg", "name": "Bash",
+                        "input": {"command": "ping -n 6 127.0.0.1", "run_in_background": True}})
+    out({"type": "system", "subtype": "task_started", "task_id": "bg1", "tool_use_id": "toolu_bg",
+         "description": "Ping localhost", "is_backgrounded": True, "task_type": "local_bash"})
+    out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_bg",
+         "content": "Command running in background with ID: bg1. Output is being written to: " + out_file, "is_error": False}]},
+         "parent_tool_use_id": None, "tool_use_result": {"stdout": "", "backgroundTaskId": "bg1"}})
+    assistant("msg_2", {"type": "tool_use", "id": "toolu_agent", "name": "Agent",
+                        "input": {"description": "count files", "prompt": "Count the files"}})
+    out({"type": "system", "subtype": "task_started", "task_id": "ag1", "tool_use_id": "toolu_agent",
+         "description": "count files", "subagent_type": "general-purpose", "is_backgrounded": False,
+         "task_type": "local_agent", "prompt": "Count the files"})
+    out({"type": "assistant", "message": {"id": "msg_sub1", "content": [{"type": "tool_use", "id": "toolu_sub",
+         "name": "Bash", "input": {"command": "dir /b"}}]}, "parent_tool_use_id": "toolu_agent"})
+    out({"type": "control_request", "request_id": "req-sub", "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+         "input": {"command": "dir /b"}, "tool_use_id": "toolu_sub"}})
+    next_message()  # the approval
+    out({"type": "system", "subtype": "task_progress", "task_id": "ag1", "tool_use_id": "toolu_agent",
+         "description": "Running dir /b", "usage": {"total_tokens": 21254, "tool_uses": 1, "duration_ms": 821},
+         "last_tool_name": "Bash"})
+    out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_sub",
+         "content": "one.txt\ntwo.txt", "is_error": False}]}, "parent_tool_use_id": "toolu_agent"})
+    out({"type": "assistant", "message": {"id": "msg_sub2", "content": [{"type": "text", "text": "SUBAGENT: two files"}]},
+         "parent_tool_use_id": "toolu_agent"})
+    out({"type": "system", "subtype": "task_updated", "task_id": "ag1", "patch": {"status": "completed"}})
+    out({"type": "system", "subtype": "task_notification", "task_id": "ag1", "tool_use_id": "toolu_agent",
+         "status": "completed", "summary": "There are two files."})
+    out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_agent",
+         "content": [{"type": "text", "text": "There are two files."}], "is_error": False}]}, "parent_tool_use_id": None})
+    out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "tool_use_id": "toolu_bg",
+         "status": "completed", "output_file": out_file, "summary": "Background command completed"})
+    stream_text("Two files, and the ping finished.")
+    assistant("msg_3", {"type": "text", "text": "Two files, and the ping finished."})
+    result(0.02)
 elif "write" in prompt and not no_tools:
     assistant("msg_1", {"type": "thinking", "thinking": "I will write it."})
     assistant("msg_1", {"type": "tool_use", "id": "toolu_1", "name": "Write",

@@ -18,6 +18,14 @@ providers, written in C++ with wxWidgets.
   calls or right after it answers. Delete on a queued row takes it back; if you
   stop the response, queued messages return to the message box. Claude Code
   takes them while it works; Codex gets them as a follow-up turn.
+- **Activity** (Ctrl+T, or Actions): what is running alongside the
+  conversation and what has finished - Claude Code's subagents (their prompt,
+  every step they take, tokens and tool uses, and their summary), background
+  shells (their command and live output), and FastChat's own tools. It updates
+  every second without moving you while you read the details. A subagent's
+  current step also shows in the waiting row, its approval requests name it
+  ("Agent 'count files' wants to: Run: dir /b"), and agents and background
+  shells starting and finishing are events with their own sounds and speech.
 - **Compaction**: Ctrl+K (or Actions) summarizes the conversation so far; the
   summary replaces the older messages in what is sent, while they stay in the
   list to read. It also happens on its own when the context passes a share of
@@ -107,6 +115,7 @@ Conversation window:
 | Ctrl+Shift+Comma | Conversation settings |
 | Ctrl+R | Regenerate the last response |
 | Ctrl+K | Compact the conversation |
+| Ctrl+T | Running tools and agents (Activity) |
 | Ctrl | Stop speaking (anywhere in FastChat; can be turned off in Settings > Speech) |
 | Ctrl+Shift+R | Speak the last response |
 | Ctrl+Shift+S | Stop speaking |

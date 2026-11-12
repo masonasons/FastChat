@@ -143,6 +143,9 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
         Message copy = m;
         Post([copy](ChatListener& l) mutable { l.OnQueuedDelivered(copy); });
     };
+    callbacks.onActivity = [this](const ActivityEvent& event) {
+        Post([event](ChatListener& l) { l.OnActivity(event); });
+    };
     callbacks.onNote = [this, providerId](Message& note) {
         note.providerId = providerId;
         note.createdAt = NowSeconds();
@@ -364,7 +367,22 @@ void ChatRunner::RunTurn(ChatTurn turn) {
             if (m_cancel) break;
             std::string description = DescribeToolCall(call);
             Post([call, description](ChatListener& l) { l.OnToolRunning(call, description); });
+            ActivityEvent started;
+            started.id = call.id;
+            started.toolUseId = call.id;
+            started.kind = call.name == "run_command" ? "shell" : "tool";
+            started.description = description;
+            started.status = "running";
+            Post([started](ChatListener& l) { l.OnActivity(started); });
+            auto toolStart = std::chrono::steady_clock::now();
             ToolOutcome outcome = turn.computer ? RunComputerTool(call, computer) : RunTool(call, turn.toolContext);
+            ActivityEvent ended;
+            ended.id = call.id;
+            ended.status = m_cancel ? "stopped" : outcome.error ? "failed" : "completed";
+            ended.summary = outcome.summary;
+            ended.durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - toolStart).count();
+            ended.line = TruncateUtf8(outcome.output, 4000);
+            Post([ended](ChatListener& l) { l.OnActivity(ended); });
             Message toolMsg;
             toolMsg.role = Role::Tool;
             toolMsg.toolCallId = call.id;

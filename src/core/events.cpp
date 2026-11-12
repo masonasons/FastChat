@@ -17,6 +17,8 @@ const EventInfo kEvents[] = {
     {"title_generated", "Title generated", false, true, "Titled {conversation}", 760, 0, 30},
     {"message_deleted", "Message deleted", true, false, "Deleted", 300, 0, 40},
     {"compacted", "Conversation compacted", true, true, "Compacted", 620, 470, 50},
+    {"task_started", "Agent or background task started", true, false, "Started {tool}", 560, 700, 35},
+    {"task_finished", "Agent or background task finished", true, false, "{tool} {summary}", 700, 560, 35},
 };
 
 static_assert(sizeof(kEvents) / sizeof(kEvents[0]) == static_cast<size_t>(EventId::Count),

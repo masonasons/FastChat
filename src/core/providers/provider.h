@@ -141,6 +141,28 @@ struct ChatResult {
 // Provider
 // ---------------------------------------------------------------------------
 
+// Something running alongside the conversation: a subagent, a background
+// shell, or a tool. Each event updates the one with its id; empty fields and
+// negative numbers leave what was known before.
+struct ActivityEvent {
+    std::string id;           // the task's id (or the tool call's)
+    std::string toolUseId;    // the tool call that started it
+    std::string kind;         // "agent", "shell", "tool"
+    std::string description;
+    std::string status;       // "running", "completed", "failed", "stopped"
+    std::string agentType;    // a subagent's type ("general-purpose", "Explore"...)
+    std::string prompt;       // what a subagent was asked
+    std::string progress;     // its latest step
+    std::string lastTool;
+    int64_t tokens = -1;
+    int64_t toolUses = -1;
+    int64_t durationMs = -1;
+    std::string outputFile;   // where a background shell writes its output
+    std::string summary;      // how it ended
+    std::string line;         // a line for its transcript (a subagent's tool calls, words, results)
+    bool background = false;
+};
+
 // A whole turn by a coding agent (Claude Code, Codex): it runs its own tools
 // until it is done, and FastChat shows and stores what it did.
 struct AgentTurn {
@@ -165,6 +187,8 @@ struct AgentCallbacks : StreamCallbacks {
     std::function<void(Message&)> onQueuedDelivered;
     // A note for the conversation (the agent compacted its context, ...).
     std::function<void(Message&)> onNote;
+    // Subagents and background shells starting, progressing and ending.
+    std::function<void(const ActivityEvent&)> onActivity;
 };
 
 class Provider {
