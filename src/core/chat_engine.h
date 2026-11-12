@@ -33,6 +33,13 @@ public:
     // Asked when a command (or, for coding agents, another action such as
     // writing a file) needs approval; call `answer` (on the UI thread) once.
     virtual void OnApproveCommand(const std::string& what, bool isCommand, std::function<void(bool)> answer) = 0;
+    // A coding agent asks the user questions with choices; call `answer` (on the
+    // UI thread) once: whether they answered, and one answer per question.
+    virtual void OnAskQuestions(const std::vector<AgentQuestion>& questions,
+                                std::function<void(bool answered, std::vector<std::string> answers)> answer) {
+        (void)questions;
+        answer(false, {});
+    }
     enum class Outcome { Done, Stopped, Failed };
     virtual void OnFinished(Outcome outcome, const std::string& error) = 0;
     // What it is doing now ("Trying again in 2 seconds...").
@@ -83,6 +90,7 @@ private:
     void RunAgentTurn(ChatTurn turn, Provider& provider);
     void Post(std::function<void(ChatListener&)> fn);
     bool AskApproval(const std::string& what, bool isCommand);
+    bool AskQuestions(const std::vector<AgentQuestion>& questions, std::vector<std::string>& answers);
 
     std::function<void(std::function<void()>)> m_post;
     ChatListener* m_listener = nullptr;

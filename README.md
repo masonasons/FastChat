@@ -71,7 +71,12 @@ providers, written in C++ with wxWidgets.
   conversations. Claude Code's approval requests become FastChat's Allow / Don't
   allow dialog. FastChat starts it in its default permission mode while asking
   is on, even if your own settings use auto mode; your CLAUDE.md, MCP servers
-  and allow list still apply. Codex can't ask in headless mode, so it gets file
+  and allow list still apply. When Claude Code asks you questions with choices,
+  a Questions dialog shows each one as a group of options (radio buttons for one
+  answer, check boxes for any number) with a box for an answer in your own
+  words; Answer sends your choices back, Don't answer tells it you declined.
+  Questions are always asked, even with everything allowed, and have their own
+  event (Question for you). Codex can't ask in headless mode, so it gets file
   edits inside the folder only, with no network access. Each reply keeps the
   agent's session id, so the next message resumes that session.
 - **Speech and sounds**: every event (message sent, response started, thinking,
@@ -98,7 +103,7 @@ providers, written in C++ with wxWidgets.
   sound for plays its built-in tone, and a sound file chosen for an event
   plays instead of the pack's. Event keys: message_sent, response_started,
   reasoning_started, response_complete, response_error, generation_stopped,
-  tool_call, tool_result, tool_failed, approval_needed, conversation_opened,
+  tool_call, tool_result, tool_failed, approval_needed, question_asked, conversation_opened,
   conversation_created, title_generated, message_deleted, compacted,
   task_started, task_finished.
 - **Per-conversation settings** (Ctrl+Shift+Comma) override any of it: model,

@@ -61,6 +61,35 @@ bool ChatRunner::AskApproval(const std::string& command, bool isCommand) {
     return future.get();
 }
 
+bool ChatRunner::AskQuestions(const std::vector<AgentQuestion>& questions, std::vector<std::string>& answers) {
+    using Reply = std::pair<bool, std::vector<std::string>>;
+    auto promise = std::make_shared<std::promise<Reply>>();
+    auto replied = std::make_shared<std::atomic<bool>>(false);
+    std::future<Reply> future = promise->get_future();
+    std::weak_ptr<ChatRunner> weak = weak_from_this();
+    m_post([weak, questions, promise, replied]() {
+        auto self = weak.lock();
+        auto answer = [promise, replied](bool answered, std::vector<std::string> list) {
+            if (!replied->exchange(true)) promise->set_value({answered, std::move(list)});
+        };
+        if (!self || !self->m_listener || self->m_cancel) {
+            answer(false, {});
+            return;
+        }
+        self->m_listener->OnAskQuestions(questions, answer);
+    });
+    while (future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+        if (m_cancel) {
+            if (!replied->exchange(true)) promise->set_value({false, {}});
+            break;
+        }
+    }
+    Reply reply = future.get();
+    if (!reply.first || reply.second.size() != questions.size()) return false;
+    answers = std::move(reply.second);
+    return true;
+}
+
 void ChatRunner::Run(ChatTurn turn) {
     // Nothing that goes wrong here may end the program: report it instead.
     std::string problem;
@@ -132,6 +161,9 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
         Post([call, description](ChatListener& l) { l.OnToolRunning(call, description); });
     };
     callbacks.approve = [this](const std::string& what, bool isCommand) { return AskApproval(what, isCommand); };
+    callbacks.askQuestions = [this](const std::vector<AgentQuestion>& questions, std::vector<std::string>& answers) {
+        return AskQuestions(questions, answers);
+    };
     callbacks.onLimits = [providerId](const std::vector<std::pair<std::string, std::string>>& limits, const std::string& summary) {
         AppProviderCache().SetRateLimits(providerId, limits);
         if (!summary.empty()) AppProviderCache().SetSummary(providerId, summary);

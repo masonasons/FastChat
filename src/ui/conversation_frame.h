@@ -41,6 +41,8 @@ public:
     void OnMessage(Message& message) override;
     void OnToolRunning(const ToolCall& call, const std::string& description) override;
     void OnApproveCommand(const std::string& what, bool isCommand, std::function<void(bool)> answer) override;
+    void OnAskQuestions(const std::vector<AgentQuestion>& questions,
+                        std::function<void(bool answered, std::vector<std::string> answers)> answer) override;
     void OnFinished(Outcome outcome, const std::string& error) override;
     void OnStatus(const std::string& text) override;
     void OnProblem(const std::string& error, const std::string& details) override;

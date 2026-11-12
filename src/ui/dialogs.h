@@ -8,6 +8,9 @@
 #include <wx/wx.h>
 
 #include <string>
+#include <vector>
+
+struct AgentQuestion;
 
 // Read-only text in a multiline box, for reading a message line by line,
 // account details, conversation information.
@@ -40,3 +43,9 @@ void ShowAccountInfo(wxWindow* parent, const ProviderConfig& config);
 
 // The conversation's own settings. Returns false if cancelled.
 bool EditConversationSettings(wxWindow* parent, Conversation& conversation);
+
+// A coding agent's questions with choices (one group of options per question,
+// and an answer in the user's own words). False if they chose not to answer;
+// otherwise one answer per question.
+bool AskAgentQuestions(wxWindow* parent, const wxString& asker, const std::vector<AgentQuestion>& questions,
+                       std::vector<std::string>& answers);

@@ -17,6 +17,7 @@ enum class EventId {
     ToolResult,
     ToolFailed,          // ...and it failed (instead of ToolResult)
     ApprovalNeeded,     // a command waits for the user's OK
+    QuestionAsked,      // a coding agent asks the user to choose (Claude Code's questions)
     ConversationOpened,
     ConversationCreated,
     TitleGenerated,

@@ -45,6 +45,13 @@ std::string Describe(const std::string& name, const json& input, const std::stri
     if (name == "WebSearch") return "Search the web for " + Str(input, "query");
     if (name == "Task" || name == "Agent") return "Agent: " + Str(input, "description");
     if (name == "TodoWrite") return "Update the to-do list";
+    if (name == "AskUserQuestion") {
+        std::string asked;
+        for (const auto& q : input.value("questions", json::array())) {
+            if (q.is_object() && !Str(q, "question").empty()) asked += (asked.empty() ? "" : " / ") + Str(q, "question");
+        }
+        return "Ask: " + (asked.empty() ? std::string("a question") : asked);
+    }
     return name + " " + OneLine(JsonDump(input), 100);
 }
 
@@ -86,6 +93,23 @@ Usage ReadUsage(const json& u) {
 
 std::string FormatReset(int64_t when) {
     return when > 0 ? FormatRelativeTime(when) : std::string();
+}
+
+// AskUserQuestion's questions, from its input.
+std::vector<AgentQuestion> ReadQuestions(const json& input) {
+    std::vector<AgentQuestion> questions;
+    for (const auto& q : input.value("questions", json::array())) {
+        if (!q.is_object() || Str(q, "question").empty()) continue;
+        AgentQuestion one;
+        one.header = Str(q, "header");
+        one.question = Str(q, "question");
+        one.multiSelect = q.value("multiSelect", false);
+        for (const auto& o : q.value("options", json::array())) {
+            if (o.is_object() && !Str(o, "label").empty()) one.options.push_back({Str(o, "label"), Str(o, "description")});
+        }
+        questions.push_back(one);
+    }
+    return questions;
 }
 
 // A user message's content: its text alone, or with its images and PDFs
@@ -497,6 +521,20 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
             std::string requestId = Str(ev, "request_id");
             if (!stdinOpen) {
                 // Nothing can answer it; Claude Code has already given up on it.
+            } else if (Str(request, "subtype") == "can_use_tool" && Str(request, "tool_name") == "AskUserQuestion") {
+                // Questions for the user, whatever the approval setting: the
+                // answers go back in the tool's input, keyed by question.
+                json input = request.value("input", json::object());
+                std::vector<AgentQuestion> questions = ReadQuestions(input);
+                std::vector<std::string> answers;
+                if (!questions.empty() && callbacks.askQuestions && callbacks.askQuestions(questions, answers)) {
+                    json byQuestion = json::object();
+                    for (size_t i = 0; i < questions.size(); i++) byQuestion[questions[i].question] = answers[i];
+                    input["answers"] = byQuestion;
+                    respond(requestId, {{"behavior", "allow"}, {"updatedInput", input}});
+                } else {
+                    respond(requestId, {{"behavior", "deny"}, {"message", "The user chose not to answer these questions. Ask them how to proceed."}});
+                }
             } else if (Str(request, "subtype") == "can_use_tool") {
                 std::string tool = Str(request, "tool_name");
                 json input = request.value("input", json::object());

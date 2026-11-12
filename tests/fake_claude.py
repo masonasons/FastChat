@@ -186,6 +186,30 @@ elif "run" in prompt and not no_tools:
     stream_text("It printed hi.")
     assistant("msg_2", {"type": "text", "text": "It printed hi."})
     result(0.0125)
+elif "question" in prompt:
+    # AskUserQuestion, as Claude Code 2.1 asks it: the answers come back in the
+    # tool's input, keyed by question.
+    questions = [{"question": "Favourite colour?", "header": "Colour", "multiSelect": False,
+                  "options": [{"label": "Red", "description": "warm"}, {"label": "Green", "description": "calm"}]},
+                 {"question": "Which fruits?", "header": "Fruits", "multiSelect": True,
+                  "options": [{"label": "Apple", "description": ""}, {"label": "Plum", "description": ""}]}]
+    assistant("msg_1", {"type": "tool_use", "id": "toolu_q", "name": "AskUserQuestion", "input": {"questions": questions}})
+    out({"type": "control_request", "request_id": "req-q", "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion",
+         "display_name": "AskUserQuestion", "input": {"questions": questions}, "tool_use_id": "toolu_q",
+         "requires_user_interaction": True}})
+    reply = next_message()["response"]["response"]
+    if reply["behavior"] == "allow":
+        answers = reply["updatedInput"]["answers"]
+        result_text = "Your questions have been answered: " + ", ".join('"%s"="%s"' % kv for kv in answers.items())
+        text = "You chose %s and %s." % (answers["Favourite colour?"], answers["Which fruits?"])
+        error = False
+    else:
+        result_text, text, error = reply["message"], "You did not answer.", True
+    out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_q",
+         "content": result_text, "is_error": error}]}, "parent_tool_use_id": None})
+    stream_text(text)
+    assistant("msg_2", {"type": "text", "text": text})
+    result(0.0125)
 elif attached:
     text = "Saw " + " and ".join(attached) + " with: " + prompt
     stream_text(text)

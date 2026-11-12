@@ -173,6 +173,19 @@ struct AgentTurn {
     std::string resumeSession;    // continue this session instead of sending the history
 };
 
+// A question a coding agent asks the user, with choices (Claude Code's
+// AskUserQuestion tool).
+struct AgentQuestion {
+    struct Option {
+        std::string label;
+        std::string description;
+    };
+    std::string header;        // a short name for it ("Colour")
+    std::string question;
+    std::vector<Option> options;
+    bool multiSelect = false;  // any number of the options, not just one
+};
+
 struct AgentCallbacks : StreamCallbacks {
     // A finished assistant message or tool result, in order.
     std::function<void(Message&)> onMessage;
@@ -180,6 +193,9 @@ struct AgentCallbacks : StreamCallbacks {
     std::function<void(const ToolCall& call, const std::string& description)> onToolRunning;
     // Whether to allow a tool the agent asks permission for (blocks).
     std::function<bool(const std::string& description, bool isCommand)> approve;
+    // Questions for the user (blocks): false if they chose not to answer;
+    // otherwise one answer per question (labels joined by ", ", or their own words).
+    std::function<bool(const std::vector<AgentQuestion>& questions, std::vector<std::string>& answers)> askQuestions;
     // Plan usage or rate limits the agent reported.
     std::function<void(const std::vector<std::pair<std::string, std::string>>& limits, const std::string& summary)> onLimits;
     // Messages the user sent meanwhile, for agents that take them while working.

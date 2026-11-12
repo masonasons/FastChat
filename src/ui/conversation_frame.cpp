@@ -1186,6 +1186,23 @@ void ConversationFrame::OnApproveCommand(const std::string& what, bool isCommand
     answer(yes);
 }
 
+void ConversationFrame::OnAskQuestions(const std::vector<AgentQuestion>& questions,
+                                       std::function<void(bool, std::vector<std::string>)> answer) {
+    // Always asked, even with everything allowed: it is a question, not a permission.
+    EventContext ctx = MakeContext();
+    ctx.Set("summary", questions.empty() ? std::string() : questions.front().question).Set("tool", "question");
+    NotifyEvent(EventId::QuestionAsked, ctx, &m_conv.settings);
+    if (IsIconized()) Iconize(false);
+    Raise();
+    ProviderConfig provider;
+    std::string model, error;
+    wxString asker = ResolveModel(provider, model, error) && !provider.name.empty() ? U(provider.name) : wxString("The model");
+    std::vector<std::string> answers;
+    bool answered = AskAgentQuestions(this, asker, questions, answers);
+    SetStatus(answered ? wxString("Answered") : wxString("Not answered"));
+    answer(answered, answers);
+}
+
 void ConversationFrame::OnFinished(Outcome outcome, const std::string& error) {
     m_running = false;
     bool compacting = m_compacting;

@@ -249,6 +249,14 @@ struct TestListener : ChatListener {
     }
     std::vector<std::string> approvals;
     bool approve = true;
+    // Questions with choices: what was asked, and how the "user" answers.
+    std::vector<AgentQuestion> asked;
+    bool answerQuestions = true;
+    std::vector<std::string> questionAnswers;
+    void OnAskQuestions(const std::vector<AgentQuestion>& q, std::function<void(bool, std::vector<std::string>)> answer) override {
+        asked = q;
+        answer(answerQuestions, questionAnswers);
+    }
     std::vector<std::pair<std::string, std::string>> problems;
     std::vector<std::string> statuses;
     int delivered = 0;
@@ -342,7 +350,8 @@ static void TestProvider(const std::string& base, const std::string& kind, const
 }
 
 // Any turn, driven to the end; `afterStart` runs right after it starts (to queue messages).
-static TestListener Drive(ChatTurn turn, std::function<void(ChatRunner&)> afterStart = nullptr) {
+static TestListener Drive(ChatTurn turn, std::function<void(ChatRunner&)> afterStart = nullptr,
+                          std::function<void(TestListener&)> setup = nullptr) {
     std::mutex mutex;
     std::deque<std::function<void()>> queue;
     auto runner = std::make_shared<ChatRunner>([&](std::function<void()> fn) {
@@ -350,6 +359,7 @@ static TestListener Drive(ChatTurn turn, std::function<void(ChatRunner&)> afterS
         queue.push_back(std::move(fn));
     });
     TestListener listener;
+    if (setup) setup(listener);
     runner->SetListener(&listener);
     runner->Start(turn);
     if (afterStart) afterStart(*runner);
@@ -746,6 +756,38 @@ static void TestAgents(const std::string& root) {
     CHECK(afterResult.outcome == ChatListener::Outcome::Done);
     CHECK_EQ(afterResult.text, std::string("Hello from fake Claude. Resumed sess-9. "));
     for (const auto& m : afterResult.messages) CHECK(!IsAgentCompactionNote(m));
+
+    // Questions with choices are always put to the user (even with everything
+    // allowed), and the answers go back keyed by question.
+    std::cout << "  claude code: questions\n";
+    {
+        ChatTurn ask = live;
+        ask.toolContext.commandApproval = "auto";
+        ask.request.messages = {UserMessage("Ask me a question")};
+        TestListener answered = Drive(ask, nullptr, [](TestListener& l) { l.questionAnswers = {"Green", "Apple, Plum"}; });
+        CHECK(answered.outcome == ChatListener::Outcome::Done);
+        CHECK_EQ(answered.asked.size(), size_t{2});
+        if (answered.asked.size() == 2) {
+            CHECK(answered.asked[0].header == "Colour" && answered.asked[0].question == "Favourite colour?" && !answered.asked[0].multiSelect);
+            CHECK(answered.asked[0].options.size() == 2 && answered.asked[0].options[1].label == "Green" &&
+                  answered.asked[0].options[1].description == "calm");
+            CHECK(answered.asked[1].multiSelect && answered.asked[1].options.size() == 2);
+        }
+        CHECK(answered.approvals.empty());  // a question, not a permission
+        CHECK(std::find(answered.tools.begin(), answered.tools.end(), "Ask: Favourite colour? / Which fruits?") != answered.tools.end());
+        bool chose = false, resultKept = false;
+        for (const auto& m : answered.messages) {
+            chose = chose || m.content == "You chose Green and Apple, Plum.";
+            resultKept = resultKept || (m.role == Role::Tool && m.content.find("\"Favourite colour?\"=\"Green\"") != std::string::npos);
+        }
+        CHECK(chose);
+        CHECK(resultKept);
+
+        TestListener declined = Drive(ask, nullptr, [](TestListener& l) { l.answerQuestions = false; });
+        bool toldNo = false;
+        for (const auto& m : declined.messages) toldNo = toldNo || m.content == "You did not answer.";
+        CHECK(toldNo);
+    }
 
     // Attached images and PDFs go to Claude Code as content blocks, in the
     // first message and in ones sent while it works.

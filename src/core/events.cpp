@@ -13,6 +13,7 @@ const EventInfo kEvents[] = {
     {"tool_result", "Tool result", false, false, "{summary}", 600, 0, 25},
     {"tool_failed", "Tool failed", true, true, "Failed: {summary}", 330, 247, 60},
     {"approval_needed", "Command needs approval", true, true, "Approve command: {summary}", 990, 990, 80},
+    {"question_asked", "Question for you", true, false, "Question: {summary}", 880, 1100, 70},
     {"conversation_opened", "Conversation opened", false, false, "{conversation}", 440, 660, 35},
     {"conversation_created", "Conversation created", true, false, "Created {conversation}", 440, 880, 50},
     {"title_generated", "Title generated", false, true, "Titled {conversation}", 760, 0, 30},
