@@ -1,0 +1,31 @@
+# Claude Code
+.claude/
+
+# Build outputs
+build/
+*.exe
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# FastChat's data when run portably (portable.txt beside the exe)
+portable.txt
+settings.json
+settings.json.tmp
+models-cache.json
+*.db
+*.db-shm
+*.db-wal
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+
+# Misc
+*.log
+*.tmp
+__pycache__/
+Thumbs.db
+.DS_Store

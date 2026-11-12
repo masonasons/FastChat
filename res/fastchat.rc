@@ -1,0 +1,3 @@
+// Windows resources. wx.rc supplies the standard cursors, icons and the
+// common-controls manifest wxWidgets needs.
+#include "wx/msw/wx.rc"

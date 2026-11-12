@@ -1,0 +1,56 @@
+#pragma once
+
+// Speech output: through Prism (whatever screen reader is running, or a speech
+// engine it supports) or directly through SAPI 5 on Windows. UI thread only.
+
+#include "core/settings.h"
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+class SpeechBackend {
+public:
+    virtual ~SpeechBackend() = default;
+    virtual bool Speak(const std::string& text, bool interrupt) = 0;
+    virtual void Stop() = 0;
+    virtual std::vector<std::string> Voices() = 0;
+    virtual bool SetVoice(const std::string& name) = 0;
+    virtual void SetRate(int rate0to100) = 0;
+    virtual void SetVolume(int volume0to100) = 0;
+    virtual std::string Name() const = 0;
+};
+
+class Speech {
+public:
+    // (Re)create the backend from the settings.
+    void Configure(const SpeechSettings& settings);
+    void Shutdown();
+
+    // Speak with the configured voice, or a conversation's own voice and rate.
+    void Speak(const std::string& text, bool interrupt, const std::optional<std::string>& voice = std::nullopt,
+               const std::optional<int>& rate = std::nullopt);
+    void Stop();
+    std::string BackendName() const;
+
+    // For the settings dialog.
+    static bool PrismAvailable();
+    static bool SapiAvailable();
+    static std::vector<std::string> PrismBackendNames();
+    // Voices of an engine ("prism" with a backend name, or "sapi").
+    static std::vector<std::string> ListVoices(const std::string& engine, const std::string& prismBackend);
+
+private:
+    std::unique_ptr<SpeechBackend> m_backend;
+    SpeechSettings m_settings;
+    std::string m_currentVoice;
+    int m_currentRate = -1;
+};
+
+Speech& AppSpeech();
+
+// Implementations
+std::unique_ptr<SpeechBackend> CreatePrismBackend(const std::string& backendName);
+std::unique_ptr<SpeechBackend> CreateSapiBackend();  // null where SAPI does not exist
+std::vector<std::string> ListPrismBackends();
