@@ -32,6 +32,10 @@ public:
     void Speak(const std::string& text, bool interrupt, const std::optional<std::string>& voice = std::nullopt,
                const std::optional<int>& rate = std::nullopt);
     void Stop();
+    // Interface announcements (buffer names...): through the screen reader
+    // (Prism, its best output) unless the settings send them to the speech
+    // engine, whichever engine reads the replies.
+    void Announce(const std::string& text);
     std::string BackendName() const;
 
     // For the settings dialog.
@@ -43,6 +47,8 @@ public:
 
 private:
     std::unique_ptr<SpeechBackend> m_backend;
+    std::unique_ptr<SpeechBackend> m_announcer;  // Prism, for announcements
+    bool m_announcerTried = false;
     SpeechSettings m_settings;
     std::string m_currentVoice;
     int m_currentRate = -1;

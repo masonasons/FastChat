@@ -60,6 +60,7 @@ struct SpeechSettings {
     bool stripMarkdown = true;
     bool skipCodeBlocks = false;      // say "code block" instead of reading the code
     bool ctrlStops = true;            // the Ctrl key silences speech
+    std::string announceWith = "prism";  // interface announcements: "prism" (screen reader) or "speech"
 };
 
 struct SoundSettings {

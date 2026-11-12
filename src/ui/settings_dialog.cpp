@@ -328,6 +328,11 @@ private:
         m_ctrlStops = new wxCheckBox(panel, wxID_ANY, "Pressing Ctrl stops spee&ch");
         m_ctrlStops->SetValue(sp.ctrlStops);
         s->Add(m_ctrlStops, 0, wxALL, 6);
+        m_announceWith = new wxChoice(panel, wxID_ANY);
+        m_announceWith->Append("The screen reader (Prism)");
+        m_announceWith->Append("The speech engine above");
+        m_announceWith->SetSelection(sp.announceWith == "speech" ? 1 : 0);
+        s->Add(LabeledRow(panel, "Say &buffer names and other announcements with:", m_announceWith, 0), 0, wxALL, 6);
         panel->SetSizer(s);
 
         m_engine->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { UpdateSpeechControls(true); });
@@ -381,6 +386,7 @@ private:
         sp.stripMarkdown = m_stripMarkdown->GetValue();
         sp.skipCodeBlocks = m_skipCode->GetValue();
         sp.ctrlStops = m_ctrlStops->GetValue();
+        sp.announceWith = m_announceWith->GetSelection() == 1 ? "speech" : "prism";
     }
 
     // ---------------- Sounds ----------------
@@ -467,6 +473,7 @@ private:
     wxCheckBox* m_stripMarkdown;
     wxCheckBox* m_skipCode;
     wxCheckBox* m_ctrlStops;
+    wxChoice* m_announceWith;
     // sounds
     wxCheckBox* m_soundsOn;
     wxSlider* m_soundVolume;

@@ -135,6 +135,8 @@ Show): All, Conversation (your messages and the replies), Responses, Yours,
 Thinking (the model's reasoning), Tools, Commands, and Errors and notes.
 Switching says the buffer's name, how many items it holds and the one you are
 on, and keeps you on the same message when it is in the new buffer.
+These announcements go to the screen reader through Prism, whichever engine reads
+the replies (Settings > Speech can send them to the speech engine instead).
 
 On a message: Enter views it, Ctrl+C copies it, Delete deletes it (a tool call
 goes with its results), Shift+Delete deletes it and everything after, and
@@ -148,6 +150,9 @@ Windows, with Visual Studio 2022 (C++ workload), CMake 3.24+ and Git:
 ```bat
 build.bat
 ```
+
+It works while FastChat is running: the running FastChat.exe is renamed to
+FastChat.old.exe so the new one can be written; restart FastChat to use it.
 
 CMake fetches wxWidgets, Prism, nlohmann/json, SQLite and miniaudio into
 `build\` on the first run, which takes a while. To reuse a wxWidgets checkout you

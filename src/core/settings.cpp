@@ -76,6 +76,7 @@ bool Settings::Load() {
         Get(s, "stripMarkdown", speech.stripMarkdown);
         Get(s, "skipCodeBlocks", speech.skipCodeBlocks);
         Get(s, "ctrlStops", speech.ctrlStops);
+        Get(s, "announceWith", speech.announceWith);
     }
     if (auto it = root.find("sounds"); it != root.end()) {
         Get(*it, "enabled", sounds.enabled);
@@ -153,6 +154,7 @@ bool Settings::Save() const {
         {"stripMarkdown", speech.stripMarkdown},
         {"skipCodeBlocks", speech.skipCodeBlocks},
         {"ctrlStops", speech.ctrlStops},
+        {"announceWith", speech.announceWith},
     };
     root["sounds"] = {{"enabled", sounds.enabled}, {"volume", sounds.volume}};
     json ev = json::object();

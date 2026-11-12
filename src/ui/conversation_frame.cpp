@@ -267,7 +267,7 @@ void ConversationFrame::SwitchBuffer(int to) {
                        (count == 0 ? std::string("empty") : std::to_string(count) + (count == 1 ? " item" : " items"));
     int row = m_list->GetSelection();
     if (row >= 0) said += ". " + S(m_list->GetString(static_cast<unsigned>(row)));
-    SpeakOnRequest(said, &m_conv.settings);
+    AppSpeech().Announce(said);
     SetStatus("Showing " + name);
 }
 

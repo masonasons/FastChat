@@ -161,6 +161,8 @@ std::unique_ptr<SpeechBackend> CreateSapiBackend() {
 
 void Speech::Configure(const SpeechSettings& settings) {
     m_settings = settings;
+    m_announcer.reset();
+    m_announcerTried = false;
     m_backend.reset();
     m_currentVoice.clear();
     m_currentRate = -1;
@@ -180,6 +182,22 @@ void Speech::Configure(const SpeechSettings& settings) {
 void Speech::Shutdown() {
     if (m_backend) m_backend->Stop();
     m_backend.reset();
+    m_announcer.reset();
+}
+
+void Speech::Announce(const std::string& text) {
+    if (Trim(text).empty()) return;
+    if (m_settings.announceWith != "speech") {
+        if (!m_announcerTried) {
+            m_announcerTried = true;
+            m_announcer = CreatePrismBackend("auto");
+        }
+        if (m_announcer) {
+            m_announcer->Speak(text, true);
+            return;
+        }
+    }
+    if (m_backend) m_backend->Speak(text, true);
 }
 
 void Speech::Speak(const std::string& text, bool interrupt, const std::optional<std::string>& voice,
@@ -200,6 +218,7 @@ void Speech::Speak(const std::string& text, bool interrupt, const std::optional<
 
 void Speech::Stop() {
     if (m_backend) m_backend->Stop();
+    if (m_announcer) m_announcer->Stop();
 }
 
 std::string Speech::BackendName() const {
