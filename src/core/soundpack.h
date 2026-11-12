@@ -38,6 +38,24 @@ bool PackHasEventSound(const std::string& folder, const std::string& eventKey);
 // Forget the packs and files seen, so added or changed ones are found.
 void ForgetSoundPackFiles();
 
+// The name a zip's pack gets: the one folder its sounds are in, if they are
+// all in one, else the zip's own name. "" if it cannot be read.
+std::string SoundPackNameForZip(const std::string& zipPath);
+
+struct SoundPackImport {
+    bool ok = false;
+    std::string name;
+    std::string folder;
+    int sounds = 0;
+    std::string error;
+};
+
+// Unpacks the zip's sound files (.wav .ogg .mp3 .flac, anywhere in it) into a
+// pack called `name` in the user's packs folder, replacing a pack of that name.
+// Packs are flat: only file names are kept, never paths from the zip. A zip
+// that fails leaves the pack that was there.
+SoundPackImport ImportSoundPackZip(const std::string& zipPath, const std::string& name);
+
 // What kind of tool a tool name is, the same across providers: "command",
 // "read", "write", "edit", "search", "list", "web", "agent", "todo", "plan",
 // "mcp", or "" for others.

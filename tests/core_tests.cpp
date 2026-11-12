@@ -16,6 +16,8 @@
 #include "core/sse.h"
 #include "core/util.h"
 
+#include <miniz.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -661,11 +663,19 @@ static void TestAgents(const std::string& root) {
     cc.request.messages = {UserMessage("/compact")};
     TestListener ccr = Drive(cc);
     CHECK(ccr.outcome == ChatListener::Outcome::Done);
-    bool noted = false;
+    int notes = 0;
     for (const auto& m : ccr.messages) {
-        if (GetNoteKind(m) == NoteKind::Note && m.content.find("31.9K tokens down to 6.9K") != std::string::npos) noted = true;
+        if (!IsAgentCompactionNote(m)) continue;
+        notes++;
+        CHECK(m.content.find("31.9K tokens down to 6.9K") != std::string::npos);
+        // Claude Code's summary, without its preamble and reminders.
+        CHECK_EQ(m.providerData["fastchat"].value("summary", std::string()),
+                 std::string("1. Primary Request and Intent:\n   The user said hello."));
     }
-    CHECK(noted);
+    CHECK_EQ(notes, 1);
+    // Nothing else of the compaction becomes a message.
+    for (const auto& m : ccr.messages) CHECK(m.content.find("This session is being continued") == std::string::npos);
+    CHECK(std::find(ccr.statuses.begin(), ccr.statuses.end(), "Compacting the conversation") != ccr.statuses.end());
 
     // After a /compact (which gets no reply), only the new message is sent, in
     // the same session; not "/compact" again with the new message after it.
@@ -681,6 +691,19 @@ static void TestAgents(const std::string& root) {
                                     UserMessage("Swallowed by a compaction", 5), note, UserMessage("What next?", 7)};
     CHECK_EQ(ContextMessages(history).size(), size_t{5});        // notes left out for API models
     CHECK_EQ(ContextMessages(history, true).size(), size_t{7});  // kept for coding agents
+    // The list starts at the latest compaction; the rest is in the full history.
+    std::vector<bool> hidden = BeforeLatestCompaction(history);
+    CHECK((hidden == std::vector<bool>{true, true, true, true, true, false, false}));
+    // Claude Code compacting by itself keeps the message it is answering.
+    Message autoNote = MakeNote(NoteKind::Note, "Claude Code compacted the conversation", {{"agentCompaction", true}, {"trigger", "auto"}});
+    std::vector<Message> autoHistory = {UserMessage("Hi", 1), reply, UserMessage("Now this", 3), autoNote};
+    CHECK((BeforeLatestCompaction(autoHistory) == std::vector<bool>{true, true, false, false}));
+    // FastChat's summary covers the messages up to the one it names.
+    Message summaryNote = MakeNote(NoteKind::Compaction, "Summary of the conversation so far: ...", {{"through", 2}});
+    std::vector<Message> ownHistory = {UserMessage("Hi", 1), reply, UserMessage("Sent meanwhile", 3), summaryNote,
+                                       UserMessage("After", 5)};
+    CHECK((BeforeLatestCompaction(ownHistory) == std::vector<bool>{true, true, false, false, false}));
+    CHECK((BeforeLatestCompaction({UserMessage("No compaction", 1)}) == std::vector<bool>{false}));
     ChatTurn after = live;
     after.request.messages = ContextMessages(history, true);
     TestListener afterResult = Drive(after);
@@ -1089,6 +1112,85 @@ static void TestSoundPacks() {
     CHECK(EventFromKey("tool_failed") == EventId::ToolFailed);
 }
 
+// A zip with these files (name -> content), compressed.
+static void WriteZip(const std::string& path, const std::vector<std::pair<std::string, std::string>>& files) {
+    mz_zip_archive zip{};
+    CHECK(mz_zip_writer_init_heap(&zip, 0, 0));
+    for (const auto& [name, content] : files) {
+        CHECK(mz_zip_writer_add_mem(&zip, name.c_str(), content.data(), content.size(), MZ_DEFAULT_COMPRESSION));
+    }
+    void* data = nullptr;
+    size_t size = 0;
+    CHECK(mz_zip_writer_finalize_heap_archive(&zip, &data, &size));
+    CHECK(WriteFileText(path, std::string(static_cast<const char*>(data), size)));
+    mz_free(data);  // the finished archive is ours to free
+    mz_zip_writer_end(&zip);
+}
+
+static void TestSoundPackImport(const std::string& dir) {
+    std::cout << "Sound pack import:\n";
+    std::string packs = UserSoundPacksFolder();
+
+    // Sounds in one folder: the pack takes the folder's name; paths are dropped.
+    std::string zip1 = JoinPath(dir, "download.zip");
+    WriteZip(zip1, {{"My Pack/response_complete.wav", "RIFF1"},
+                    {"My Pack/tools/tool_call-edit.ogg", "OggS"},
+                    {"My Pack/readme.txt", "not a sound"},
+                    {"__MACOSX/My Pack/._response_complete.wav", "fork"}});
+    CHECK_EQ(SoundPackNameForZip(zip1), std::string("My Pack"));
+    SoundPackImport r = ImportSoundPackZip(zip1, SoundPackNameForZip(zip1));
+    CHECK(r.ok);
+    CHECK_EQ(r.sounds, 2);
+    std::string folder = JoinPath(packs, "My Pack");
+    CHECK_EQ(r.folder, folder);
+    CHECK(fs::exists(PathFromUtf8(JoinPath(folder, "response_complete.wav"))));
+    CHECK(fs::exists(PathFromUtf8(JoinPath(folder, "tool_call-edit.ogg"))));
+    CHECK(!fs::exists(PathFromUtf8(JoinPath(folder, "readme.txt"))));
+    CHECK(!fs::exists(PathFromUtf8(JoinPath(folder, "._response_complete.wav"))));
+    std::string text;
+    CHECK(ReadFileText(JoinPath(folder, "response_complete.wav"), text) && text == "RIFF1");
+    CHECK_EQ(FindSoundPackFolder("My Pack"), folder);  // found straight away
+
+    // Sounds at the top: the zip's name. A path climbing out stays inside the pack.
+    std::string zip2 = JoinPath(dir, "Workshop.zip");
+    WriteZip(zip2, {{"message_sent.wav", "a"}, {"../escaped.wav", "b"}});
+    CHECK_EQ(SoundPackNameForZip(zip2), std::string("Workshop"));
+    r = ImportSoundPackZip(zip2, "Workshop");
+    CHECK(r.ok && r.sounds == 2);
+    CHECK(fs::exists(PathFromUtf8(JoinPath(JoinPath(packs, "Workshop"), "escaped.wav"))));
+    CHECK(!fs::exists(PathFromUtf8(JoinPath(packs, "escaped.wav"))));
+
+    // Importing again replaces the pack: files the new zip lacks are gone.
+    WriteZip(zip2, {{"compacted.wav", "c"}});
+    r = ImportSoundPackZip(zip2, "Workshop");
+    CHECK(r.ok && r.sounds == 1);
+    CHECK(!fs::exists(PathFromUtf8(JoinPath(JoinPath(packs, "Workshop"), "message_sent.wav"))));
+    CHECK(fs::exists(PathFromUtf8(JoinPath(JoinPath(packs, "Workshop"), "compacted.wav"))));
+
+    // No sounds, or not a zip: an error, and the pack already there is kept.
+    std::string zip3 = JoinPath(dir, "empty.zip");
+    WriteZip(zip3, {{"notes.txt", "x"}});
+    r = ImportSoundPackZip(zip3, "Workshop");
+    CHECK(!r.ok && !r.error.empty());
+    CHECK(fs::exists(PathFromUtf8(JoinPath(JoinPath(packs, "Workshop"), "compacted.wav"))));
+    std::string notZip = JoinPath(dir, "not-a.zip");
+    WriteFileText(notZip, "plain text");
+    r = ImportSoundPackZip(notZip, "Workshop");
+    CHECK(!r.ok);
+    CHECK(fs::exists(PathFromUtf8(JoinPath(JoinPath(packs, "Workshop"), "compacted.wav"))));
+    // The unpacking folder never shows as a pack.
+    for (const auto& p : ListSoundPacks()) CHECK(!StartsWith(p.name, "."));
+
+    // A real pack's zip, when asked for (unpacked into the test data folder).
+    if (const char* real = std::getenv("FASTCHAT_TEST_PACK_ZIP"); real && *real) {
+        std::string name = SoundPackNameForZip(real);
+        SoundPackImport ri = ImportSoundPackZip(real, name.empty() ? std::string("Real") : name);
+        if (!ri.ok) std::cerr << "    error: " << ri.error << "\n";
+        CHECK(ri.ok && ri.sounds > 0);
+        std::cout << "  " << real << ": pack " << name << ", " << ri.sounds << " sounds\n";
+    }
+}
+
 int main() {
     std::string dir = PathToUtf8(fs::temp_directory_path() / ("fastchat-test-" + NewId().substr(0, 8)));
     fs::create_directories(PathFromUtf8(dir));
@@ -1126,6 +1228,7 @@ int main() {
     TestDatabase(dir);
     TestCodeTools(dir);
     TestSoundPacks();
+    TestSoundPackImport(dir);
 
     // Spoken templates: an emptied placeholder leaves no dangling colon.
     EventContext ctx;

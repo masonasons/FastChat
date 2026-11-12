@@ -1,4 +1,5 @@
 #include "core/conversation.h"
+#include "core/util.h"
 
 const char* RoleKey(Role role) {
     switch (role) {
@@ -175,6 +176,34 @@ bool IsAgentCompactionNote(const Message& m) {
     if (GetNoteKind(m) != NoteKind::Note) return false;
     const json& f = m.providerData["fastchat"];
     return f.is_object() && f.value("agentCompaction", false);
+}
+
+std::vector<bool> BeforeLatestCompaction(const std::vector<Message>& all) {
+    std::vector<bool> before(all.size(), false);
+    int at = -1;
+    for (int i = static_cast<int>(all.size()) - 1; i >= 0 && at < 0; i--) {
+        if (GetNoteKind(all[i]) == NoteKind::Compaction || IsAgentCompactionNote(all[i])) at = i;
+    }
+    if (at < 0) return before;
+    const Message& note = all[at];
+    const json& f = note.providerData["fastchat"];
+    if (GetNoteKind(note) == NoteKind::Compaction) {
+        // FastChat's summary covers the messages up to the one it names; one
+        // sent while it was being written stays.
+        int64_t through = f.value("through", int64_t{0});
+        for (int i = 0; i < at; i++) before[i] = GetNoteKind(all[i]) != NoteKind::None || all[i].id <= through;
+        return before;
+    }
+    // A coding agent: /compact replaces everything before it. Compacting by
+    // itself before answering keeps the messages it is answering (the user's,
+    // right before the note).
+    bool manual = f.value("trigger", std::string()) == "manual" || StartsWith(note.content, "Compacted");
+    int keepFrom = at;
+    if (!manual) {
+        while (keepFrom > 0 && all[keepFrom - 1].role == Role::User) keepFrom--;
+    }
+    for (int i = 0; i < keepFrom; i++) before[i] = true;
+    return before;
 }
 
 std::vector<Message> ContextMessages(const std::vector<Message>& all, bool forAgent) {

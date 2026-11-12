@@ -53,8 +53,11 @@ enum {
 const size_t kMaxRowChars = 8000;
 const int kStopHotkeyId = 0xB0F0;
 
-// The views of the message list, switched with Left and Right.
-enum Buffer { BUF_ALL, BUF_CONVERSATION, BUF_RESPONSES, BUF_YOURS, BUF_THINKING, BUF_TOOLS, BUF_COMMANDS, BUF_NOTES, BUF_COUNT };
+// The views of the message list, switched with Left and Right. All but the
+// full history start at the latest compaction, as the model sees it.
+enum Buffer {
+    BUF_ALL, BUF_CONVERSATION, BUF_RESPONSES, BUF_YOURS, BUF_THINKING, BUF_TOOLS, BUF_COMMANDS, BUF_NOTES, BUF_HISTORY, BUF_COUNT
+};
 struct BufferInfo {
     const char* name;
     bool pending;  // shows the reply in progress
@@ -69,11 +72,18 @@ const BufferInfo kBuffers[BUF_COUNT] = {
     {"Tools", false, false},
     {"Commands", false, false},
     {"Errors and notes", false, false},
+    {"Full history", true, true},
 };
 
 // Tools that run a shell command: FastChat's, and Claude Code's.
 bool IsCommandToolName(const std::string& name) {
     return name == "run_command" || name == "Bash" || name == "PowerShell";
+}
+
+// The summary a coding agent wrote when it compacted, if this is its note.
+std::string AgentSummary(const Message& m) {
+    if (!IsAgentCompactionNote(m)) return std::string();
+    return m.providerData.at("fastchat").value("summary", std::string());
 }
 
 }  // namespace
@@ -227,11 +237,14 @@ std::string ConversationFrame::CommandOf(int index) const {
 
 // A turn that only calls tools has no row of its own: its tool results show
 // what it did.
-bool ConversationFrame::ShowsRow(const Message& m) const {
+bool ConversationFrame::ShowsRow(int index) const {
+    const Message& m = m_messages[index];
+    if (m_buffer != BUF_HISTORY && BeforeCompaction(index)) return false;
     bool note = GetNoteKind(m) != NoteKind::None || m.role == Role::System;
     bool reply = m.role == Role::Assistant && !note && (!Trim(m.content).empty() || m.stopReason == "cancelled");
+    bool compaction = GetNoteKind(m) == NoteKind::Compaction || IsAgentCompactionNote(m);
     switch (m_buffer) {
-        case BUF_CONVERSATION: return m.role == Role::User || reply;
+        case BUF_CONVERSATION: return m.role == Role::User || reply || compaction;
         case BUF_RESPONSES: return reply;
         case BUF_YOURS: return m.role == Role::User;
         case BUF_THINKING: return m.role == Role::Assistant && !Trim(m.reasoning).empty();
@@ -241,6 +254,10 @@ bool ConversationFrame::ShowsRow(const Message& m) const {
         default:
             return !(m.role == Role::Assistant && Trim(m.content).empty() && !m.toolCalls.empty() && m.stopReason != "cancelled");
     }
+}
+
+bool ConversationFrame::BeforeCompaction(int index) const {
+    return index < static_cast<int>(m_beforeCompaction.size()) && m_beforeCompaction[index];
 }
 
 bool ConversationFrame::PendingShown() const {
@@ -283,7 +300,12 @@ wxString ConversationFrame::RowText(int index) const {
         case Role::System:
             switch (GetNoteKind(m)) {
                 case NoteKind::Error: text = "Error: " + OneLine(m.content); break;
-                case NoteKind::Note: text = OneLine(m.content); break;
+                case NoteKind::Note: {
+                    text = OneLine(m.content);
+                    std::string summary = AgentSummary(m);
+                    if (!summary.empty()) text += ". Summary: " + OneLine(summary, 300);
+                    break;
+                }
                 case NoteKind::Compaction: {
                     int count = m.providerData["fastchat"].value("count", 0);
                     text = "Summary of the " + std::to_string(count) + " earlier messages, which are no longer sent: " +
@@ -336,7 +358,7 @@ int ConversationFrame::RowForMessage(int index) const {
 }
 
 void ConversationFrame::AppendRow(int index) {
-    if (!ShowsRow(m_messages[index])) return;
+    if (!ShowsRow(index)) return;
     int pending = static_cast<int>(m_rows.size());
     if (pending < static_cast<int>(m_list->GetCount())) {
         m_list->Insert(RowText(index), pending);
@@ -347,12 +369,13 @@ void ConversationFrame::AppendRow(int index) {
 }
 
 void ConversationFrame::FillList(int select) {
+    m_beforeCompaction = BeforeLatestCompaction(m_messages);
     m_list->Freeze();
     m_list->Clear();
     m_rows.clear();
     wxArrayString rows;
     for (int i = 0; i < static_cast<int>(m_messages.size()); i++) {
-        if (!ShowsRow(m_messages[i])) continue;
+        if (!ShowsRow(i)) continue;
         rows.Add(RowText(i));
         m_rows.push_back(i);
     }
@@ -839,8 +862,9 @@ void ConversationFrame::OnMessage(Message& message) {
         int index = static_cast<int>(m_messages.size()) - 1;
         ctx.soundVariants = ToolSoundVariants(message.toolName, IsCommandToolName(message.toolName) ? CommandOf(index) : std::string());
         NotifyEvent(message.toolError ? EventId::ToolFailed : EventId::ToolResult, ctx, &m_conv.settings);
-    } else if (GetNoteKind(message) == NoteKind::Compaction ||
-               (GetNoteKind(message) == NoteKind::Note && message.providerData["fastchat"].value("agentCompaction", false))) {
+    } else if (GetNoteKind(message) == NoteKind::Compaction || IsAgentCompactionNote(message)) {
+        // The list now starts at the summary, as the model's context does.
+        FillList(static_cast<int>(m_messages.size()) - 1);
         NotifyEvent(EventId::Compacted, MakeContext(), &m_conv.settings);
         SetStatus(GetNoteKind(message) == NoteKind::Compaction ? wxString("Compacted") : U(message.content));
     }
@@ -1328,6 +1352,9 @@ void ConversationFrame::ViewMessage(int index) {
             } else if (GetNoteKind(m) == NoteKind::Compaction) {
                 title = "Summary";
                 text = m.content;
+            } else if (std::string summary = AgentSummary(m); !summary.empty()) {
+                title = "Summary";
+                text = m.content + "\n\n" + summary;
             } else {
                 title = "Note";
                 text = m.content;

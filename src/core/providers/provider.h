@@ -187,6 +187,8 @@ struct AgentCallbacks : StreamCallbacks {
     std::function<void(Message&)> onQueuedDelivered;
     // A note for the conversation (the agent compacted its context, ...).
     std::function<void(Message&)> onNote;
+    // What it is doing, for the status bar ("Compacting the conversation").
+    std::function<void(const std::string&)> onStatus;
     // Subagents and background shells starting, progressing and ending.
     std::function<void(const ActivityEvent&)> onActivity;
 };

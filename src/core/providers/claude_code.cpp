@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <map>
+#include <optional>
 
 namespace {
 
@@ -77,6 +78,25 @@ Usage ReadUsage(const json& u) {
 
 std::string FormatReset(int64_t when) {
     return when > 0 ? FormatRelativeTime(when) : std::string();
+}
+
+// After a compaction, Claude Code sends its summary as a user message that
+// starts like this, and carries on from it.
+bool IsCompactSummary(const std::string& text) {
+    return StartsWith(text, "This session is being continued from a previous conversation");
+}
+
+// The summary itself: from its "Summary:" line, without the reminders
+// Claude Code puts in for the model.
+std::string CompactSummaryText(const std::string& text) {
+    std::string s = text;
+    for (size_t open; (open = s.find("<system-reminder>")) != std::string::npos;) {
+        size_t close = s.find("</system-reminder>", open);
+        s.erase(open, close == std::string::npos ? std::string::npos : close + 18 - open);
+    }
+    size_t at = s.find("Summary:");
+    if (at != std::string::npos) s = s.substr(at + 8);
+    return Trim(s);
 }
 
 class ClaudeCodeProvider : public Provider {
@@ -216,6 +236,12 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         activity(e);
     };
     bool gotResult = false;
+    std::optional<Message> compaction;  // a compaction's note, until its summary arrives
+    auto flushCompaction = [&]() {
+        if (!compaction) return;
+        if (callbacks.onNote) callbacks.onNote(*compaction);
+        compaction.reset();
+    };
 
     auto flush = [&]() {
         if (!hasPending) return;
@@ -236,9 +262,12 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         child.Write(JsonDump(r) + "\n");
     };
 
-    // A message written after the model's last request may start another turn
-    // (another result), or be taken into the one finishing: after a result,
-    // wait a moment before closing standard input.
+    // A message written after the model's last request was in none of its
+    // requests, so Claude Code runs it as another turn once this one ends (its
+    // "dequeue"). Standard input must stay open for that turn: its approvals
+    // come back that way. Its first output can take a while (a long context, or
+    // thinking first), so wait long for it; a minute is only a fallback in case
+    // no turn comes.
     bool wroteSinceRequest = false;
     bool stdinOpen = true;
     std::chrono::steady_clock::time_point closeAt{};
@@ -276,6 +305,14 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         if (!ev.is_object()) continue;
         std::string type = Str(ev, "type");
         bool topLevel = !ev.contains("parent_tool_use_id") || ev["parent_tool_use_id"].is_null();
+        // A compaction's note goes out with the summary after it, or before
+        // whatever else comes instead.
+        bool summary = false;
+        if (compaction && type == "user" && topLevel) {
+            const json& content = ev.value("message", json::object()).value("content", json());
+            summary = content.is_string() && IsCompactSummary(content.get<std::string>());
+        }
+        if (compaction && !summary) flushCompaction();
 
         if (type == "system" && Str(ev, "subtype") == "init") {
             session = Str(ev, "session_id");
@@ -315,14 +352,20 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 e.summary = Str(ev, "summary");
             }
             activity(e);
+        } else if (type == "system" && Str(ev, "subtype") == "status") {
+            if (Str(ev, "status") == "compacting" && callbacks.onStatus) callbacks.onStatus("Compacting the conversation");
         } else if (type == "system" && Str(ev, "subtype") == "compact_boundary") {
             // Claude Code compacted its context (asked with /compact, or by itself).
             const json& meta = ev.value("compact_metadata", json::object());
             std::string text = std::string(Str(meta, "trigger") == "manual" ? "Compacted" : "Claude Code compacted the conversation");
             int64_t pre = meta.value("pre_tokens", int64_t{0}), post = meta.value("post_tokens", int64_t{0});
             if (pre) text += ": " + FormatTokensShort(pre) + " tokens down to " + FormatTokensShort(post);
-            Message note = MakeNote(NoteKind::Note, text, {{"agentCompaction", true}});
-            if (callbacks.onNote) callbacks.onNote(note);
+            // Its summary comes next, as a user message; the note waits for it.
+            flushCompaction();
+            compaction = MakeNote(NoteKind::Note, text, {{"agentCompaction", true}, {"trigger", Str(meta, "trigger")}});
+        } else if (summary) {
+            compaction->providerData["fastchat"]["summary"] = CompactSummaryText(ev["message"]["content"].get<std::string>());
+            flushCompaction();
         } else if (type == "stream_event" && topLevel) {
             const json& e = ev.value("event", json::object());
             std::string etype = Str(e, "type");
@@ -489,13 +532,14 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 result.errorDetails = "Claude Code reported: " + OneLine(line, 3000) + "\n";
             }
             if (wroteSinceRequest && result.error.empty()) {
-                closeAt = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                closeAt = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             } else if (stdinOpen) {
                 child.CloseStdin();
                 stdinOpen = false;
             }
         }
     }
+    flushCompaction();
     flush();
     if (!result.cancelled && child.Wait(5000) < 0) child.Kill();
     result.providerData["claude_code"] = {{"session_id", session}};

@@ -148,3 +148,8 @@ std::vector<Message> ContextMessages(const std::vector<Message>& all, bool forAg
 
 // A coding agent's note that it compacted its context.
 bool IsAgentCompactionNote(const Message& m);
+
+// For each message, whether it is from before the latest compaction (FastChat's
+// summary, or a coding agent's): what the model no longer sees, kept in the
+// conversation but listed only in its full history.
+std::vector<bool> BeforeLatestCompaction(const std::vector<Message>& all);

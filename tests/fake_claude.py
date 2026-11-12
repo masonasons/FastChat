@@ -46,6 +46,8 @@ def assistant(msg_id, block):
 
 
 def stream_text(text):
+    out({"type": "stream_event", "event": {"type": "message_start", "message": {"role": "assistant"}},
+         "parent_tool_use_id": None, "session_id": session})
     out({"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
          "content_block": {"type": "text", "text": ""}}, "parent_tool_use_id": None, "session_id": session})
     for piece in text.split(" "):
@@ -75,8 +77,16 @@ out({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifi
     "seven_day": {"utilization": 0.25, "resetsAt": 1794499200, "status": "allowed"}}}, "session_id": session})
 
 if prompt.startswith("/compact"):  # like Claude Code: what follows is instructions for the summary
+    # As Claude Code 2.1 does: its status, the boundary, then the summary it carries on from.
+    out({"type": "system", "subtype": "status", "status": "compacting", "session_id": session})
+    out({"type": "system", "subtype": "status", "status": None, "compact_result": "success", "session_id": session})
     out({"type": "system", "subtype": "compact_boundary", "session_id": session,
          "compact_metadata": {"trigger": "manual", "pre_tokens": 31948, "post_tokens": 6933}})
+    out({"type": "user", "message": {"role": "user", "content":
+         "This session is being continued from a previous conversation that ran out of context. The summary below "
+         "covers the earlier portion of the conversation.\n\n<system-reminder>\n<tools-used-before-summary>"
+         "</tools-used-before-summary>\n</system-reminder>\nSummary:\n1. Primary Request and Intent:\n   The user said hello."},
+         "parent_tool_use_id": None, "session_id": session})
     out({"type": "user", "message": {"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"},
          "parent_tool_use_id": None, "session_id": session})
     result(0.005)

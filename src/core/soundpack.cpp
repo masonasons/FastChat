@@ -2,10 +2,13 @@
 #include "core/platform.h"
 #include "core/util.h"
 
+#include <miniz.h>
+
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <set>
 
 namespace fs = std::filesystem;
 
@@ -123,6 +126,7 @@ std::vector<SoundPackInfo> ListSoundPacks() {
             SoundPackInfo info;
             info.name = PathToUtf8(d->path().filename());
             info.folder = PathToUtf8(d->path());
+            if (StartsWith(info.name, ".")) continue;  // hidden, or a pack being imported
             byName.emplace(ToLower(info.name), info);
         }
     }
@@ -179,6 +183,148 @@ bool PackHasEventSound(const std::string& folder, const std::string& eventKey) {
 void ForgetSoundPackFiles() {
     FileCache().clear();
     FolderCache().clear();
+}
+
+// ---------------------------------------------------------------------------
+// Importing from a zip
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A zip read into memory: FastChat's own file reading copes with any path.
+class ZipReader {
+public:
+    ~ZipReader() {
+        if (m_open) mz_zip_reader_end(&m_zip);
+    }
+    bool Open(const std::string& path, std::string& error) {
+        if (!ReadFileText(path, m_data)) {
+            error = "Could not open " + path + ".";
+            return false;
+        }
+        if (!mz_zip_reader_init_mem(&m_zip, m_data.data(), m_data.size(), 0)) {
+            error = path + " could not be read as a zip (" + mz_zip_get_error_string(mz_zip_get_last_error(&m_zip)) + ").";
+            return false;
+        }
+        m_open = true;
+        return true;
+    }
+    mz_zip_archive* Zip() { return &m_zip; }
+    mz_uint Count() { return mz_zip_reader_get_num_files(&m_zip); }
+
+    // Entry i's path ("a/b.wav"), if it is a sound to take: not a folder, and
+    // not one of the Mac's resource fork copies.
+    bool SoundEntry(mz_uint i, std::string& path) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&m_zip, i, &st) || st.m_is_directory) return false;
+        path = ReplaceAll(SanitizeUtf8(st.m_filename), "\\", "/");
+        std::string base = BaseName(path);
+        if (StartsWith(path, "__MACOSX/") || StartsWith(base, "._")) return false;
+        size_t dot = base.find_last_of('.');
+        return dot != std::string::npos && IsSoundExtension(base.substr(dot));
+    }
+
+    static std::string BaseName(const std::string& path) {
+        size_t slash = path.find_last_of('/');
+        return slash == std::string::npos ? path : path.substr(slash + 1);
+    }
+
+private:
+    std::string m_data;
+    mz_zip_archive m_zip{};
+    bool m_open = false;
+};
+
+// A name that is safe as one folder name.
+std::string CleanPackName(std::string name) {
+    for (char& c : name) {
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') c = '_';
+    }
+    name = Trim(name);
+    while (!name.empty() && (name.back() == '.' || name.back() == ' ')) name.pop_back();
+    while (!name.empty() && name.front() == '.') name.erase(0, 1);
+    return name;
+}
+
+}  // namespace
+
+std::string SoundPackNameForZip(const std::string& zipPath) {
+    ZipReader zip;
+    std::string error;
+    if (!zip.Open(zipPath, error)) return std::string();
+    std::set<std::string> tops;
+    bool any = false, atRoot = false;
+    for (mz_uint i = 0; i < zip.Count(); i++) {
+        std::string path;
+        if (!zip.SoundEntry(i, path)) continue;
+        any = true;
+        size_t slash = path.find('/');
+        if (slash == std::string::npos) atRoot = true;
+        else tops.insert(path.substr(0, slash));
+    }
+    std::string name;
+    if (any && !atRoot && tops.size() == 1) name = CleanPackName(*tops.begin());
+    if (name.empty()) name = CleanPackName(PathToUtf8(PathFromUtf8(zipPath).stem()));
+    return name;
+}
+
+SoundPackImport ImportSoundPackZip(const std::string& zipPath, const std::string& packName) {
+    SoundPackImport r;
+    r.name = CleanPackName(packName);
+    if (r.name.empty()) {
+        r.error = "The sound pack needs a name.";
+        return r;
+    }
+    ZipReader zip;
+    if (!zip.Open(zipPath, r.error)) return r;
+
+    std::string root = UserSoundPacksFolder();
+    r.folder = JoinPath(root, r.name);
+    // Unpacked beside it first (a hidden name, not listed as a pack), so a zip
+    // that fails halfway leaves the old pack.
+    std::string temp = JoinPath(root, "." + r.name + ".importing");
+    std::error_code ec;
+    fs::remove_all(PathFromUtf8(temp), ec);
+    fs::create_directories(PathFromUtf8(temp), ec);
+    if (ec) {
+        r.error = "Could not create " + temp + ": " + ec.message();
+        return r;
+    }
+    auto fail = [&](const std::string& why) {
+        std::error_code ignore;
+        fs::remove_all(PathFromUtf8(temp), ignore);
+        r.error = why;
+        r.sounds = 0;
+        return r;
+    };
+
+    std::set<std::string> written;
+    for (mz_uint i = 0; i < zip.Count(); i++) {
+        std::string path;
+        if (!zip.SoundEntry(i, path)) continue;
+        std::string base = ZipReader::BaseName(path);
+        if (!written.insert(ToLower(base)).second) continue;  // the first of the same name wins
+        size_t size = 0;
+        void* data = mz_zip_reader_extract_to_heap(zip.Zip(), i, &size, 0);
+        if (!data) {
+            return fail("Could not unpack " + path + " from the zip (" +
+                        mz_zip_get_error_string(mz_zip_get_last_error(zip.Zip())) + ").");
+        }
+        std::string bytes(static_cast<const char*>(data), size);
+        mz_free(data);
+        std::string target = JoinPath(temp, base);
+        if (!WriteFileText(target, bytes)) return fail("Could not write " + target + ".");
+        r.sounds++;
+    }
+    if (r.sounds == 0) return fail("There are no sound files (.wav, .ogg, .mp3, .flac) in the zip.");
+
+    fs::remove_all(PathFromUtf8(r.folder), ec);
+    if (ec) return fail("Could not replace the pack already at " + r.folder + ": " + ec.message());
+    fs::rename(PathFromUtf8(temp), PathFromUtf8(r.folder), ec);
+    if (ec) return fail("Could not move the pack into place at " + r.folder + ": " + ec.message());
+    ForgetSoundPackFiles();
+    r.ok = true;
+    return r;
 }
 
 std::string ToolKind(const std::string& toolName) {

@@ -48,7 +48,10 @@ private:
     void BuildMenuIds();
     void FillList(int select = -1);
     wxString RowText(int index) const;
-    bool ShowsRow(const Message& m) const;
+    bool ShowsRow(int index) const;
+    // Whether a message is from before the latest compaction (shown only in
+    // the full history).
+    bool BeforeCompaction(int index) const;
     const Message* CallerOf(int index) const;
     std::string CommandOf(int index) const;
     int RowForMessage(int index) const;
@@ -123,6 +126,7 @@ private:
     wxListBox* m_list;
     wxStaticText* m_listLabel = nullptr;
     int m_buffer = 0;
+    std::vector<bool> m_beforeCompaction;  // per message, as of the last FillList
     wxTextCtrl* m_input;
     wxButton* m_send;
     wxButton* m_actions;

@@ -147,6 +147,9 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
     callbacks.onActivity = [this](const ActivityEvent& event) {
         Post([event](ChatListener& l) { l.OnActivity(event); });
     };
+    callbacks.onStatus = [this](const std::string& text) {
+        Post([text](ChatListener& l) { l.OnStatus(text); });
+    };
     callbacks.onNote = [this, providerId](Message& note) {
         note.providerId = providerId;
         note.createdAt = NowSeconds();

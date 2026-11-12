@@ -10,8 +10,10 @@
 #include "core/speech.h"
 #include "core/util.h"
 
+#include <wx/filedlg.h>
 #include <wx/notebook.h>
 #include <wx/spinctrl.h>
+#include <wx/utils.h>
 
 #include <algorithm>
 
@@ -406,6 +408,8 @@ private:
         auto* packRow = new wxBoxSizer(wxHORIZONTAL);
         m_pack = new wxChoice(panel, wxID_ANY);
         packRow->Add(LabeledRow(panel, "Sound p&ack:", m_pack, 0), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        auto* importPack = new wxButton(panel, wxID_ANY, "&Import sound pack...");
+        packRow->Add(importPack, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         auto* openPacks = new wxButton(panel, wxID_ANY, "Open sound packs f&older");
         packRow->Add(openPacks, 0, wxALIGN_CENTER_VERTICAL);
         s->Add(packRow, 0, wxALL, 6);
@@ -416,6 +420,7 @@ private:
 
         FillPacks(m_work.sounds.pack);
         m_pack->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { m_events->SetSoundPack(SelectedPack()); });
+        importPack->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ImportPack(); });
         openPacks->Bind(wxEVT_BUTTON, [](wxCommandEvent&) { OpenWithSystem(UserSoundPacksFolder()); });
         // Back from the packs folder: show packs added there.
         Bind(wxEVT_ACTIVATE, [this](wxActivateEvent& e) {
@@ -433,17 +438,50 @@ private:
         std::vector<std::string> names;
         for (const auto& p : ListSoundPacks()) names.push_back(p.name);
         if (!select.empty() && std::find(names.begin(), names.end(), select) == names.end()) names.push_back(select);
-        if (names == m_packNames && m_pack->GetCount() == names.size() + 1) return;
-        m_packNames = names;
-        m_pack->Clear();
-        m_pack->Append("None (built-in tones)");
-        m_pack->SetSelection(0);
-        for (size_t i = 0; i < names.size(); i++) {
-            bool missing = FindSoundPackFolder(names[i]).empty();
-            m_pack->Append(U(names[i]) + (missing ? " (not found)" : ""));
-            if (names[i] == select) m_pack->SetSelection(static_cast<int>(i) + 1);
+        if (names != m_packNames || m_pack->GetCount() != names.size() + 1) {
+            m_packNames = names;
+            m_pack->Clear();
+            m_pack->Append("None (built-in tones)");
+            for (const auto& n : names) m_pack->Append(U(n) + (FindSoundPackFolder(n).empty() ? " (not found)" : ""));
         }
+        int selection = 0;
+        for (size_t i = 0; i < names.size(); i++) {
+            if (names[i] == select) selection = static_cast<int>(i) + 1;
+        }
+        m_pack->SetSelection(selection);
         m_events->SetSoundPack(SelectedPack());
+    }
+
+    // A zip of sound files becomes a pack in the user's packs folder, and is chosen.
+    void ImportPack() {
+        wxFileDialog dlg(this, "Import a sound pack", "", "", "Zip files (*.zip)|*.zip|All files|*.*",
+                         wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+        if (dlg.ShowModal() != wxID_OK) return;
+        std::string zip = S(dlg.GetPath());
+        std::string name = SoundPackNameForZip(zip);
+        if (name.empty()) {
+            ShowError(this, "Could not read " + dlg.GetPath() + ".");
+            return;
+        }
+        if (wxDirExists(U(JoinPath(UserSoundPacksFolder(), name))) &&
+            !AskYesNo(this, "There is already a sound pack called " + U(name) + ". Replace it with the one in this zip?",
+                      "Import sound pack")) {
+            return;
+        }
+        SoundPackImport r;
+        {
+            wxBusyCursor busy;
+            r = ImportSoundPackZip(zip, name);
+        }
+        if (!r.ok) {
+            ShowError(this, "The sound pack was not imported. " + U(r.error));
+            return;
+        }
+        FillPacks(r.name);
+        wxMessageBox("Imported the sound pack " + U(r.name) + " with " + wxString::Format("%d", r.sounds) +
+                         " sounds. It is chosen now; OK keeps it.",
+                     "Import sound pack", wxOK | wxICON_INFORMATION, this);
+        m_pack->SetFocus();
     }
 
     std::string SelectedPack() const {

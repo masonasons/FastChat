@@ -27,10 +27,12 @@ providers, written in C++ with wxWidgets.
   ("Agent 'count files' wants to: Run: dir /b"), and agents and background
   shells starting and finishing are events with their own sounds and speech.
 - **Compaction**: Ctrl+K (or Actions) summarizes the conversation so far; the
-  summary replaces the older messages in what is sent, while they stay in the
-  list to read. It also happens on its own when the context passes a share of
-  the model's window (80% by default, Settings > General). Claude Code uses its
-  own /compact, and its automatic compactions show in the list too.
+  summary replaces the older messages in what is sent, and the list then starts
+  at the summary, as the model's context does (the older messages stay in the
+  Full history buffer). It also happens on its own when the context passes a
+  share of the model's window (80% by default, Settings > General). Claude Code
+  uses its own /compact; its compactions, automatic ones too, show its summary
+  in the list (Enter reads all of it).
 - **Errors explain themselves**: each one becomes a row in the conversation
   ("Error: ..."); Enter on it shows the provider, address, HTTP status, request
   id and what the server sent. Rate limits, server errors and dropped
@@ -82,9 +84,10 @@ providers, written in C++ with wxWidgets.
   NVDA, JAWS, ZDSR, OneCore, SAPI, UIA... or automatic) or straight to **SAPI 5**
   with its own voice, rate and volume.
 - **Sound packs**: a folder of sound files named after the events, chosen in
-  Settings > Sounds and events ("Open sound packs folder" opens the place to
-  put them: `soundpacks` in the data folder; packs in `soundpacks` beside
-  FastChat.exe come with it). A file is named after the event's key, such as
+  Settings > Sounds and events. "Import sound pack" takes a zip of the sound
+  files (named after the zip, or after the one folder they are in) and chooses
+  it; "Open sound packs folder" opens where packs are kept: `soundpacks` in the
+  data folder (packs in `soundpacks` beside FastChat.exe come with it). A file is named after the event's key, such as
   `response_complete.wav` (WAV, OGG, MP3 or FLAC). Tool events can have
   variants, the most specific found winning: `tool_call-command-git-commit`,
   `tool_call-command-git`, `tool_call-bash` (the tool's own name),
@@ -150,7 +153,8 @@ rows: "Command: cmake --build build, exit code 0".
 
 The messages list has buffers, switched with Left and Right (or Actions >
 Show): All, Conversation (your messages and the replies), Responses, Yours,
-Thinking (the model's reasoning), Tools, Commands, and Errors and notes.
+Thinking (the model's reasoning), Tools, Commands, Errors and notes, and Full
+history. After a compaction all but Full history start at its summary.
 Switching says the buffer's name, how many items it holds and the one you are
 on, and keeps you on the same message when it is in the new buffer.
 These announcements go to the screen reader through Prism, whichever engine reads
@@ -261,7 +265,8 @@ src/core/            everything but the windows
   chat_engine.*      runs a turn on a worker thread, with the tool loop
   code_tools.*       the tools code conversations give the model
   notify.*, speech.*, sound.*, events.*   speech and sound events
-  soundpack.*        sound packs: finding them and the sound for an event
+  soundpack.*        sound packs: finding them, the sound for an event, and
+                     importing a pack's zip (with miniz)
 src/ui/              the wxWidgets windows and dialogs
 tests/               core tests and the mock server
 ```

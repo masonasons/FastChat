@@ -105,6 +105,21 @@ if(NOT miniaudio_POPULATED)
     FetchContent_Populate(miniaudio)  # the header only; compiled by src/core/miniaudio_impl.c
 endif()
 
+# --- miniz (sound pack zips) ---
+# Reads the zips Windows, macOS, 7-Zip and others make (data descriptors, Zip64),
+# some of which wxWidgets' zip reader turns down.
+FetchContent_Declare(miniz
+    GIT_REPOSITORY https://github.com/richgel999/miniz.git
+    GIT_TAG 3.0.2
+    GIT_SHALLOW TRUE
+)
+set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
+set(BUILD_FUZZERS OFF CACHE INTERNAL "")
+set(BUILD_TESTS OFF CACHE INTERNAL "")
+set(INSTALL_PROJECT OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(miniz)
+target_compile_options(miniz PRIVATE ${FASTCHAT_NO_WARNINGS})
+
 # --- Prism (speech) ---
 # https://github.com/ethindp/prism: screen readers, SAPI, OneCore, VoiceOver,
 # Speech Dispatcher and more behind one C API. Built static (BUILD_SHARED_LIBS
@@ -186,7 +201,7 @@ endif()
 
 add_library(fastchat_core STATIC ${FASTCHAT_CORE_SOURCES})
 target_include_directories(fastchat_core PUBLIC src PRIVATE ${miniaudio_SOURCE_DIR})
-target_link_libraries(fastchat_core PUBLIC nlohmann_json::nlohmann_json fc_sqlite)
+target_link_libraries(fastchat_core PUBLIC nlohmann_json::nlohmann_json fc_sqlite PRIVATE miniz)
 target_compile_definitions(fastchat_core PRIVATE
     MA_NO_ENCODING
     $<$<BOOL:${FASTCHAT_PRISM}>:FASTCHAT_HAVE_PRISM>)
@@ -270,4 +285,4 @@ endif()
 # with tests/mock_server.py running and FASTCHAT_MOCK set to its address for the
 # provider tests.
 add_executable(fastchat_tests EXCLUDE_FROM_ALL tests/core_tests.cpp)
-target_link_libraries(fastchat_tests PRIVATE fastchat_core)
+target_link_libraries(fastchat_tests PRIVATE fastchat_core miniz)  # miniz: the tests write zips
