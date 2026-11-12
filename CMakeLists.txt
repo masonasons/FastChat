@@ -120,6 +120,28 @@ set(INSTALL_PROJECT OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(miniz)
 target_compile_options(miniz PRIVATE ${FASTCHAT_NO_WARNINGS})
 
+# --- YY-Thunks (Windows 7) ---
+# https://github.com/Chuyu-Team/YY-Thunks (MIT): stand-ins for Windows 8 and 10
+# functions that Prism's dependencies call (C++/WinRT, UI Automation
+# notifications...), linked into the exe so it starts on Windows 7. On newer
+# Windows each one calls the real function.
+option(FASTCHAT_WIN7 "Link YY-Thunks so FastChat runs on Windows 7" ON)
+if(WIN32 AND MSVC AND FASTCHAT_WIN7)
+    FetchContent_Declare(yythunks
+        URL https://github.com/Chuyu-Team/YY-Thunks/releases/download/v1.2.3/YY-Thunks-Objs.zip
+        URL_HASH SHA256=4DC68EC8784E0AFED7284E4393AEC672873608161C3A5AE52FAF618875D95B81
+    )
+    FetchContent_GetProperties(yythunks)
+    if(NOT yythunks_POPULATED)
+        FetchContent_Populate(yythunks)
+    endif()
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(FASTCHAT_YYTHUNKS_OBJ ${yythunks_SOURCE_DIR}/objs/x64/YY_Thunks_for_Win7.obj)
+    else()
+        set(FASTCHAT_YYTHUNKS_OBJ ${yythunks_SOURCE_DIR}/objs/x86/YY_Thunks_for_Win7.obj)
+    endif()
+endif()
+
 # --- Prism (speech) ---
 # https://github.com/ethindp/prism: screen readers, SAPI, OneCore, VoiceOver,
 # Speech Dispatcher and more behind one C API. Built static (BUILD_SHARED_LIBS
@@ -252,6 +274,11 @@ endif()
 
 add_executable(FastChat WIN32 MACOSX_BUNDLE ${FASTCHAT_SOURCES})
 target_link_libraries(FastChat PRIVATE fastchat_core wx::core wx::base wx::adv)
+if(FASTCHAT_YYTHUNKS_OBJ)
+    # An object on the command line comes before every library, so its
+    # stand-ins win over the system's import libraries.
+    target_sources(FastChat PRIVATE ${FASTCHAT_YYTHUNKS_OBJ} src/core/platform/win7_compat.cpp)
+endif()
 if(MSVC)
     target_compile_options(FastChat PRIVATE /W3)
     # A map file beside the build, to read crash addresses against.
@@ -289,3 +316,6 @@ endif()
 # provider tests.
 add_executable(fastchat_tests EXCLUDE_FROM_ALL tests/core_tests.cpp)
 target_link_libraries(fastchat_tests PRIVATE fastchat_core miniz)  # miniz: the tests write zips
+if(FASTCHAT_YYTHUNKS_OBJ)
+    target_sources(fastchat_tests PRIVATE ${FASTCHAT_YYTHUNKS_OBJ} src/core/platform/win7_compat.cpp)  # tested as it ships
+endif()

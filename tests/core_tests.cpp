@@ -1478,8 +1478,19 @@ int main() {
 #endif
 
     std::cout << "Prism backends:";
-    for (const auto& name : Speech::PrismBackendNames()) std::cout << " [" << name << "]";
+    bool oneCore = false;
+    for (const auto& name : Speech::PrismBackendNames()) {
+        std::cout << " [" << name << "]";
+        oneCore = oneCore || name == "OneCore";
+    }
     std::cout << "\n";
+    if (oneCore) {
+        // OneCore runs on the Windows Runtime (C++/WinRT), which the Windows 7
+        // stand-ins sit in front of: its voices still list, without speaking.
+        size_t voices = Speech::ListVoices("prism", "OneCore").size();
+        std::cout << "OneCore voices: " << voices << "\n";
+        CHECK(voices > 0);
+    }
     if (Speech::SystemVoicesAvailable()) {
 #ifdef _WIN32
         // SAPI is COM; in FastChat wxWidgets has set COM up on the UI thread.

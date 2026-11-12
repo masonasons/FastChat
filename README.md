@@ -200,8 +200,19 @@ exe instead of in %APPDATA%.
 It works while FastChat is running: the running FastChat.exe is renamed to
 FastChat.old.exe so the new one can be written; restart FastChat to use it.
 
-CMake fetches wxWidgets, Prism, nlohmann/json, SQLite and miniaudio into
-`build\` on the first run, which takes a while. To reuse a wxWidgets checkout you
+CMake fetches wxWidgets, Prism, nlohmann/json, SQLite, miniaudio, miniz and
+YY-Thunks into `build\` on the first run, which takes a while.
+
+FastChat.exe runs on Windows 7 SP1 and later. Prism and the libraries it uses
+call some Windows 8 and 10 functions; [YY-Thunks](https://github.com/Chuyu-Team/YY-Thunks)
+(linked in, along with `src/core/platform/win7_compat.cpp` for the one it lacks)
+stands in for them, calling the real function wherever Windows has it. On
+Windows 7 the OneCore voices are missing (they are Windows 10's), as are Claude
+Code and Codex (their programs need Windows 10); speech goes through the screen
+reader or SAPI. Secure connections there need the TLS 1.2 update for WinHTTP
+(KB3140245, part of the convenience rollup). `-DFASTCHAT_WIN7=OFF` leaves
+YY-Thunks out. `tests\check_win7.ps1` checks that the exe asks Windows for
+nothing Windows 7 lacks. To reuse a wxWidgets checkout you
 already have (FastPlay's, for instance), configure once with
 `-DFETCHCONTENT_SOURCE_DIR_WXWIDGETS=<its source folder>`.
 
@@ -261,6 +272,9 @@ python tests\mock_server.py 8765
 set FASTCHAT_MOCK=http://127.0.0.1:8765
 build\Release\fastchat_tests.exe
 ```
+
+`powershell -ExecutionPolicy Bypass -File tests\check_win7.ps1` checks every
+function FastChat.exe imports against Windows 7's own export lists.
 
 On the Mac: `./build.sh tests`, `python3 tests/mock_server.py 8765 &`, then
 `FASTCHAT_MOCK=http://127.0.0.1:8765 build/fastchat_tests`.
