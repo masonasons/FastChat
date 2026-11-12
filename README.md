@@ -114,6 +114,7 @@ Conversation window:
 | Ctrl+M | Change model |
 | Ctrl+Shift+Comma | Conversation settings |
 | Ctrl+R | Regenerate the last response |
+| Left / Right | Previous / next buffer of the messages list |
 | Ctrl+K | Compact the conversation |
 | Ctrl+T | Running tools and agents (Activity) |
 | Ctrl | Stop speaking (anywhere in FastChat; can be turned off in Settings > Speech) |
@@ -128,6 +129,12 @@ Conversation window:
 
 In the messages list, the model's text and each command it runs are separate
 rows: "Command: cmake --build build, exit code 0".
+
+The messages list has buffers, switched with Left and Right (or Actions >
+Show): All, Conversation (your messages and the replies), Responses, Yours,
+Thinking (the model's reasoning), Tools, Commands, and Errors and notes.
+Switching says the buffer's name, how many items it holds and the one you are
+on, and keeps you on the same message when it is in the new buffer.
 
 On a message: Enter views it, Ctrl+C copies it, Delete deletes it (a tool call
 goes with its results), Shift+Delete deletes it and everything after, and

@@ -52,6 +52,11 @@ private:
     const Message* CallerOf(int index) const;
     std::string CommandOf(int index) const;
     int RowForMessage(int index) const;
+    // Buffers: views of the message list (Left and Right).
+    void SwitchBuffer(int to);
+    bool PendingShown() const;
+    bool QueuedShown() const;
+    int QueuedStart() const;
     void AppendRow(int index);
     std::string AssistantName(const Message& m) const;
     void SetPendingRow(bool force);
@@ -116,6 +121,8 @@ private:
 
     wxPanel* m_panel;
     wxListBox* m_list;
+    wxStaticText* m_listLabel = nullptr;
+    int m_buffer = 0;
     wxTextCtrl* m_input;
     wxButton* m_send;
     wxButton* m_actions;

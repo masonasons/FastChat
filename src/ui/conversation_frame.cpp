@@ -29,6 +29,8 @@ enum {
     ID_CLEAR,
     ID_COMPACT,
     ID_ACTIVITY,
+    ID_BUFFER_FIRST,
+    ID_BUFFER_LAST = ID_BUFFER_FIRST + 20,
     ID_OPEN_FOLDER,
     ID_ACCOUNT,
     ID_CLOSE,
@@ -50,6 +52,24 @@ enum {
 const size_t kMaxRowChars = 8000;
 const int kStopHotkeyId = 0xB0F0;
 
+// The views of the message list, switched with Left and Right.
+enum Buffer { BUF_ALL, BUF_CONVERSATION, BUF_RESPONSES, BUF_YOURS, BUF_THINKING, BUF_TOOLS, BUF_COMMANDS, BUF_NOTES, BUF_COUNT };
+struct BufferInfo {
+    const char* name;
+    bool pending;  // shows the reply in progress
+    bool queued;   // shows messages waiting to be sent
+};
+const BufferInfo kBuffers[BUF_COUNT] = {
+    {"All", true, true},
+    {"Conversation", true, true},
+    {"Responses", true, false},
+    {"Yours", false, true},
+    {"Thinking", false, false},
+    {"Tools", false, false},
+    {"Commands", false, false},
+    {"Errors and notes", false, false},
+};
+
 // Tools that run a shell command: FastChat's, and Claude Code's.
 bool IsCommandToolName(const std::string& name) {
     return name == "run_command" || name == "Bash" || name == "PowerShell";
@@ -65,7 +85,8 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
 
     m_panel = new wxPanel(this);
     auto* sizer = new wxBoxSizer(wxVERTICAL);
-    sizer->Add(new wxStaticText(m_panel, wxID_ANY, "&Messages"), 0, wxLEFT | wxRIGHT | wxTOP, 6);
+    m_listLabel = new wxStaticText(m_panel, wxID_ANY, "&Messages: All");
+    sizer->Add(m_listLabel, 0, wxLEFT | wxRIGHT | wxTOP, 6);
     m_list = new wxListBox(m_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0, nullptr, wxLB_SINGLE | wxLB_NEEDED_SB);
     sizer->Add(m_list, 3, wxEXPAND | wxALL, 6);
     sizer->Add(new wxStaticText(m_panel, wxID_ANY, "&Write a message"), 0, wxLEFT | wxRIGHT, 6);
@@ -129,6 +150,10 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
             return;
         }
         if (key == WXK_DELETE && TakeBackQueued(m_list->GetSelection())) return;
+        if ((key == WXK_LEFT || key == WXK_RIGHT) && !e.HasAnyModifiers()) {
+            SwitchBuffer(m_buffer + (key == WXK_RIGHT ? 1 : -1));
+            return;
+        }
         if ((key == WXK_RETURN || key == WXK_NUMPAD_ENTER) && index >= 0) {
             ViewMessage(index);
             return;
@@ -201,7 +226,49 @@ std::string ConversationFrame::CommandOf(int index) const {
 // A turn that only calls tools has no row of its own: its tool results show
 // what it did.
 bool ConversationFrame::ShowsRow(const Message& m) const {
-    return !(m.role == Role::Assistant && Trim(m.content).empty() && !m.toolCalls.empty() && m.stopReason != "cancelled");
+    bool note = GetNoteKind(m) != NoteKind::None || m.role == Role::System;
+    bool reply = m.role == Role::Assistant && !note && (!Trim(m.content).empty() || m.stopReason == "cancelled");
+    switch (m_buffer) {
+        case BUF_CONVERSATION: return m.role == Role::User || reply;
+        case BUF_RESPONSES: return reply;
+        case BUF_YOURS: return m.role == Role::User;
+        case BUF_THINKING: return m.role == Role::Assistant && !Trim(m.reasoning).empty();
+        case BUF_TOOLS: return m.role == Role::Tool;
+        case BUF_COMMANDS: return m.role == Role::Tool && IsCommandToolName(m.toolName);
+        case BUF_NOTES: return note;
+        default:
+            return !(m.role == Role::Assistant && Trim(m.content).empty() && !m.toolCalls.empty() && m.stopReason != "cancelled");
+    }
+}
+
+bool ConversationFrame::PendingShown() const {
+    return kBuffers[m_buffer].pending;
+}
+
+bool ConversationFrame::QueuedShown() const {
+    return kBuffers[m_buffer].queued;
+}
+
+int ConversationFrame::QueuedStart() const {
+    return static_cast<int>(m_rows.size()) + (m_pendingRow ? 1 : 0);
+}
+
+void ConversationFrame::SwitchBuffer(int to) {
+    // Stay on the same message when it is in the new buffer, else the one before.
+    int message = SelectedMessage();
+    if (message < 0) message = static_cast<int>(m_messages.size()) - 1;
+    m_buffer = (to % BUF_COUNT + BUF_COUNT) % BUF_COUNT;
+    FillList(message);
+    if (m_list->GetSelection() < 0 && m_list->GetCount() > 0) m_list->SetSelection(0);
+    wxString name = kBuffers[m_buffer].name;
+    m_listLabel->SetLabel("&Messages: " + name);
+    size_t count = m_rows.size();
+    std::string said = std::string(kBuffers[m_buffer].name) + ", " +
+                       (count == 0 ? std::string("empty") : std::to_string(count) + (count == 1 ? " item" : " items"));
+    int row = m_list->GetSelection();
+    if (row >= 0) said += ". " + S(m_list->GetString(static_cast<unsigned>(row)));
+    SpeakOnRequest(said, &m_conv.settings);
+    SetStatus("Showing " + name);
 }
 
 wxString ConversationFrame::RowText(int index) const {
@@ -225,6 +292,10 @@ wxString ConversationFrame::RowText(int index) const {
             }
             break;
         case Role::Assistant:
+            if (m_buffer == BUF_THINKING) {
+                text = AssistantName(m) + " thought: " + OneLine(m.reasoning);
+                break;
+            }
             text = AssistantName(m) + ": ";
             if (!m.content.empty()) text += OneLine(m.content);
             else if (!m.reasoning.empty()) text += "(thinking only) " + OneLine(m.reasoning);
@@ -286,7 +357,9 @@ void ConversationFrame::FillList(int select) {
     if (!rows.empty()) m_list->Append(rows);
     m_pendingRow = false;
     if (m_running) SetPendingRow(true);
-    for (const auto& q : m_queued) m_list->Append(U("Queued: " + OneLine(q, kMaxRowChars)));
+    if (QueuedShown()) {
+        for (const auto& q : m_queued) m_list->Append(U("Queued: " + OneLine(q, kMaxRowChars)));
+    }
     int row = RowForMessage(select);
     if (row >= 0) m_list->SetSelection(row);
     m_list->Thaw();
@@ -299,7 +372,7 @@ int ConversationFrame::SelectedMessage() const {
 }
 
 void ConversationFrame::SetPendingRow(bool force) {
-    if (!m_running) return;
+    if (!m_running || !PendingShown()) return;
     std::string name = m_streamModel.empty() ? std::string("Assistant") : ModelDisplayName(m_conv.settings.providerId, m_streamModel);
     std::string text;
     if (!m_runningTool.empty()) text = m_runningTool;
@@ -473,7 +546,7 @@ void ConversationFrame::Send() {
         queued.content = S(m_input->GetValue());
         m_runner->Enqueue(queued);
         m_queued.push_back(queued.content);
-        m_list->Append(U("Queued: " + OneLine(queued.content, kMaxRowChars)));
+        if (QueuedShown()) m_list->Append(U("Queued: " + OneLine(queued.content, kMaxRowChars)));
         m_input->Clear();
         NotifyEvent(EventId::MessageSent, MakeContext(), &m_conv.settings);
         SetStatus("Queued: it goes to the model at its next step. Delete on it in the list takes it back.");
@@ -767,8 +840,8 @@ void ConversationFrame::OnMessage(Message& message) {
 void ConversationFrame::OnQueuedDelivered(Message& message) {
     // The first queued row becomes a real message.
     if (!m_queued.empty()) {
-        int row = static_cast<int>(m_rows.size()) + (m_pendingRow ? 1 : 0);
-        if (row < static_cast<int>(m_list->GetCount())) m_list->Delete(row);
+        int row = QueuedStart();
+        if (QueuedShown() && row < static_cast<int>(m_list->GetCount())) m_list->Delete(row);
         m_queued.erase(m_queued.begin());
     }
     OnMessage(message);
@@ -859,7 +932,8 @@ void ConversationFrame::OnProblem(const std::string& error, const std::string& d
 }
 
 bool ConversationFrame::TakeBackQueued(int row) {
-    int first = static_cast<int>(m_rows.size()) + (m_pendingRow ? 1 : 0);
+    if (!QueuedShown()) return false;
+    int first = QueuedStart();
     int q = row - first;
     if (row < 0 || q < 0 || q >= static_cast<int>(m_queued.size())) return false;
     if (!m_runner->CancelQueued(static_cast<size_t>(q))) {
@@ -943,8 +1017,10 @@ void ConversationFrame::OnFinished(Outcome outcome, const std::string& error) {
     // Messages queued too late for this turn.
     std::vector<Message> leftover = m_runner->TakeQueued();
     if (!m_queued.empty()) {
-        int first = static_cast<int>(m_rows.size()) + (m_pendingRow ? 1 : 0);
-        for (size_t i = 0; i < m_queued.size() && first < static_cast<int>(m_list->GetCount()); i++) m_list->Delete(first);
+        int first = QueuedStart();
+        if (QueuedShown()) {
+            for (size_t i = 0; i < m_queued.size() && first < static_cast<int>(m_list->GetCount()); i++) m_list->Delete(first);
+        }
         m_queued.clear();
     }
     ReleaseStopHotkey();
@@ -1142,7 +1218,14 @@ void ConversationFrame::OnCommand(wxCommandEvent& e) {
         case ID_MSG_REGENERATE: if (index >= 0) RegenerateFrom(index); break;
         case ID_MSG_DELETE: if (index >= 0) DeleteMessage(index, false); break;
         case ID_MSG_DELETE_AFTER: if (index >= 0) DeleteMessage(index, true); break;
-        default: e.Skip(); break;
+        default:
+            if (e.GetId() >= ID_BUFFER_FIRST && e.GetId() < ID_BUFFER_FIRST + BUF_COUNT) {
+                SwitchBuffer(e.GetId() - ID_BUFFER_FIRST);
+                m_list->SetFocus();
+            } else {
+                e.Skip();
+            }
+            break;
     }
 }
 
@@ -1163,6 +1246,12 @@ void ConversationFrame::ShowActions() {
     menu.Append(ID_REGENERATE, "&Regenerate the last response\tCtrl+R");
     menu.Append(ID_COMPACT, "Com&pact the conversation\tCtrl+K");
     menu.Append(ID_ACTIVITY, "Running &tools and agents...\tCtrl+T");
+    auto* show = new wxMenu();
+    for (int i = 0; i < BUF_COUNT; i++) {
+        show->AppendRadioItem(ID_BUFFER_FIRST + i, kBuffers[i].name);
+        if (i == m_buffer) show->Check(ID_BUFFER_FIRST + i, true);
+    }
+    menu.AppendSubMenu(show, "S&how (Left and Right in the messages)");
     menu.AppendSeparator();
     menu.Append(ID_SPEAK_LAST, "S&peak the last response\tCtrl+Shift+R");
     menu.Append(ID_STOP_SPEECH, "Stop spea&king\tCtrl+Shift+S");
