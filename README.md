@@ -73,16 +73,34 @@ providers, written in C++ with wxWidgets.
   edits inside the folder only, with no network access. Each reply keeps the
   agent's session id, so the next message resumes that session.
 - **Speech and sounds**: every event (message sent, response started, thinking,
-  complete, error, tool call, tool result, command approval, and more) can play
-  a sound (a file, or a built-in tone) and speak a text template such as
+  complete, error, tool call, tool result, tool failed, command approval, and
+  more) can play a sound (a file, a sound pack's, or a built-in tone) and speak
+  a text template such as
   `{model} is responding`. Responses can be spoken when complete or sentence by
   sentence as they arrive. Tool calls and commands are only spoken with "Speak
   tool calls and commands" on (Settings > Speech, or per conversation). Speech goes through **Prism** (statically linked:
   NVDA, JAWS, ZDSR, OneCore, SAPI, UIA... or automatic) or straight to **SAPI 5**
   with its own voice, rate and volume.
+- **Sound packs**: a folder of sound files named after the events, chosen in
+  Settings > Sounds and events ("Open sound packs folder" opens the place to
+  put them: `soundpacks` in the data folder; packs in `soundpacks` beside
+  FastChat.exe come with it). A file is named after the event's key, such as
+  `response_complete.wav` (WAV, OGG, MP3 or FLAC). Tool events can have
+  variants, the most specific found winning: `tool_call-command-git-commit`,
+  `tool_call-command-git`, `tool_call-bash` (the tool's own name),
+  `tool_call-command` (its kind: command, read, write, edit, search, list, web,
+  agent, todo, plan, mcp), then `tool_call`. The same goes for `tool_result`
+  and `tool_failed`; `task_started` and `task_finished` have `-agent` and
+  `-shell`, and `task_finished` also `-agent-failed`. An event the pack has no
+  sound for plays its built-in tone, and a sound file chosen for an event
+  plays instead of the pack's. Event keys: message_sent, response_started,
+  reasoning_started, response_complete, response_error, generation_stopped,
+  tool_call, tool_result, tool_failed, approval_needed, conversation_opened,
+  conversation_created, title_generated, message_deleted, compacted,
+  task_started, task_finished.
 - **Per-conversation settings** (Ctrl+Shift+Comma) override any of it: model,
   system prompt, reasoning effort, temperature, response length, command
-  approval, speech, voice, rate, and each event's sound and speech.
+  approval, speech, voice, rate, sound pack, and each event's sound and speech.
 
 ## Keys
 
@@ -243,6 +261,7 @@ src/core/            everything but the windows
   chat_engine.*      runs a turn on a worker thread, with the tool loop
   code_tools.*       the tools code conversations give the model
   notify.*, speech.*, sound.*, events.*   speech and sound events
+  soundpack.*        sound packs: finding them and the sound for an event
 src/ui/              the wxWidgets windows and dialogs
 tests/               core tests and the mock server
 ```

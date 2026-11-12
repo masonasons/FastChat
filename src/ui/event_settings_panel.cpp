@@ -1,6 +1,7 @@
 #include "ui/event_settings_panel.h"
 #include "ui/ui_util.h"
 #include "core/notify.h"
+#include "core/soundpack.h"
 
 #include <wx/filedlg.h>
 
@@ -41,10 +42,10 @@ void EventSettingsPanel::Build() {
     auto* fileRow = new wxBoxSizer(wxHORIZONTAL);
     fileRow->Add(new wxStaticText(this, wxID_ANY, "Sound &file:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
     m_file = new wxTextCtrl(this, wxID_ANY);
-    m_file->SetHint("Empty: the built-in tone");
+    m_file->SetHint("Empty: the sound pack's sound, or the built-in tone");
     fileRow->Add(m_file, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
     m_browse = new wxButton(this, wxID_ANY, "&Browse...");
-    m_builtIn = new wxButton(this, wxID_ANY, "B&uilt-in tone");
+    m_builtIn = new wxButton(this, wxID_ANY, "Defa&ult sound");
     m_play = new wxButton(this, wxID_ANY, "&Play");
     fileRow->Add(m_browse, 0, wxRIGHT, 4);
     fileRow->Add(m_builtIn, 0, wxRIGHT, 4);
@@ -108,7 +109,12 @@ wxString EventSettingsPanel::ListLabel(int i) const {
         return label + ": " + parts;
     }
     const EventConfig& c = m_workConfigs[i];
-    wxString parts = c.soundEnabled ? (c.soundFile.empty() ? "tone" : "sound file") : "no sound";
+    wxString parts = "no sound";
+    if (c.soundEnabled) {
+        if (!c.soundFile.empty()) parts = "sound file";
+        else if (PackHasEventSound(FindSoundPackFolder(m_pack), info.key)) parts = "sound pack";
+        else parts = "tone";
+    }
     parts += c.speakEnabled ? ", spoken" : ", not spoken";
     return label + ": " + parts;
 }
@@ -194,7 +200,12 @@ void EventSettingsPanel::Preview() {
     if (m_current < 0) return;
     EventConfig c;
     c.soundFile = S(m_file->GetValue());
-    PreviewEventSound(static_cast<EventId>(m_current), c);
+    PreviewEventSound(static_cast<EventId>(m_current), c, m_pack);
+}
+
+void EventSettingsPanel::SetSoundPack(const std::string& pack) {
+    m_pack = pack;
+    for (int i = 0; i < kCount; i++) RefreshListLabel(i);
 }
 
 void EventSettingsPanel::Save() {

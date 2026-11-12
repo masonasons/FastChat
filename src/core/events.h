@@ -15,7 +15,8 @@ enum class EventId {
     GenerationStopped,   // the user stopped it
     ToolCall,            // code conversations: the model runs a tool
     ToolResult,
-    ApprovalNeeded,      // a command waits for the user's OK
+    ToolFailed,          // ...and it failed (instead of ToolResult)
+    ApprovalNeeded,     // a command waits for the user's OK
     ConversationOpened,
     ConversationCreated,
     TitleGenerated,
@@ -45,7 +46,7 @@ const char* EventPlaceholderHelp();
 
 struct EventConfig {
     bool soundEnabled = true;
-    std::string soundFile;   // empty: the built-in tone
+    std::string soundFile;   // empty: the sound pack's sound, else the built-in tone
     bool speakEnabled = false;
     std::string speechText;
 };

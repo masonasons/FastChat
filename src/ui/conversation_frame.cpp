@@ -4,6 +4,7 @@
 #include "ui/ui_util.h"
 #include "core/database.h"
 #include "core/platform.h"
+#include "core/soundpack.h"
 #include "core/speech.h"
 #include "core/util.h"
 
@@ -835,7 +836,9 @@ void ConversationFrame::OnMessage(Message& message) {
     } else if (message.role == Role::Tool) {
         EventContext ctx = MakeContext();
         ctx.Set("tool", message.toolName).Set("summary", message.reasoning);
-        NotifyEvent(EventId::ToolResult, ctx, &m_conv.settings);
+        int index = static_cast<int>(m_messages.size()) - 1;
+        ctx.soundVariants = ToolSoundVariants(message.toolName, IsCommandToolName(message.toolName) ? CommandOf(index) : std::string());
+        NotifyEvent(message.toolError ? EventId::ToolFailed : EventId::ToolResult, ctx, &m_conv.settings);
     } else if (GetNoteKind(message) == NoteKind::Compaction ||
                (GetNoteKind(message) == NoteKind::Note && message.providerData["fastchat"].value("agentCompaction", false))) {
         NotifyEvent(EventId::Compacted, MakeContext(), &m_conv.settings);
@@ -898,6 +901,7 @@ void ConversationFrame::OnActivity(const ActivityEvent& e) {
     if (isNew && notable && a->Running()) {
         EventContext ctx = MakeContext();
         ctx.Set("tool", ActivityTitle(*a));
+        ctx.soundVariants = {i.kind};
         NotifyEvent(EventId::TaskStarted, ctx, &m_conv.settings);
     }
     if (wasRunning && !a->Running()) {
@@ -905,6 +909,7 @@ void ConversationFrame::OnActivity(const ActivityEvent& e) {
         if (notable) {
             EventContext ctx = MakeContext();
             ctx.Set("tool", ActivityTitle(*a)).Set("summary", i.status);
+            ctx.soundVariants = {i.kind + "-" + i.status, i.kind};  // "agent-failed", then "agent"
             NotifyEvent(EventId::TaskFinished, ctx, &m_conv.settings);
         }
     }
@@ -980,18 +985,19 @@ int64_t ConversationFrame::ContextUsed(bool& exact) const {
 
 void ConversationFrame::OnToolRunning(const ToolCall& call, const std::string& description) {
     SetStatus(U(description));
+    std::string command;
     if (IsCommandToolName(call.name)) {
         json args = ArgumentsToObject(call.arguments);
-        std::string command = args.contains("command") && args["command"].is_string() ? args["command"].get<std::string>() : description;
-        m_runningTool = "Running command: " + OneLine(command);
+        command = args.contains("command") && args["command"].is_string() ? args["command"].get<std::string>() : std::string();
+        m_runningTool = "Running command: " + OneLine(command.empty() ? description : command);
     } else {
         m_runningTool = "Running: " + description;
     }
     EventContext ctx = MakeContext();
     ctx.Set("tool", description).Set("summary", description);
+    ctx.soundVariants = ToolSoundVariants(call.name, command);
     NotifyEvent(EventId::ToolCall, ctx, &m_conv.settings);
     SetPendingRow(true);
-    (void)call;
 }
 
 void ConversationFrame::OnApproveCommand(const std::string& what, bool isCommand, std::function<void(bool)> answer) {

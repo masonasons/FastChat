@@ -147,6 +147,7 @@ set(FASTCHAT_CORE_SOURCES
     src/core/notify.cpp
     src/core/speech.cpp
     src/core/sound.cpp
+    src/core/soundpack.cpp
     src/core/miniaudio_impl.c
     src/core/providers/provider.cpp
     src/core/providers/openai_compat.cpp

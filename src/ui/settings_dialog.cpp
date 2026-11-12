@@ -6,11 +6,14 @@
 #include "ui/ui_util.h"
 #include "core/notify.h"
 #include "core/providers/provider.h"
+#include "core/soundpack.h"
 #include "core/speech.h"
 #include "core/util.h"
 
 #include <wx/notebook.h>
 #include <wx/spinctrl.h>
+
+#include <algorithm>
 
 namespace {
 
@@ -399,10 +402,53 @@ private:
         s->Add(m_soundsOn, 0, wxALL, 6);
         m_soundVolume = new wxSlider(panel, wxID_ANY, m_work.sounds.volume, 0, 100);
         s->Add(LabeledRow(panel, "Sound &volume:", m_soundVolume), 0, wxEXPAND | wxALL, 6);
+
+        auto* packRow = new wxBoxSizer(wxHORIZONTAL);
+        m_pack = new wxChoice(panel, wxID_ANY);
+        packRow->Add(LabeledRow(panel, "Sound p&ack:", m_pack, 0), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        auto* openPacks = new wxButton(panel, wxID_ANY, "Open sound packs f&older");
+        packRow->Add(openPacks, 0, wxALIGN_CENTER_VERTICAL);
+        s->Add(packRow, 0, wxALL, 6);
+
         m_events = new EventSettingsPanel(panel, m_work.events);
         s->Add(m_events, 1, wxEXPAND | wxALL, 6);
         panel->SetSizer(s);
+
+        FillPacks(m_work.sounds.pack);
+        m_pack->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { m_events->SetSoundPack(SelectedPack()); });
+        openPacks->Bind(wxEVT_BUTTON, [](wxCommandEvent&) { OpenWithSystem(UserSoundPacksFolder()); });
+        // Back from the packs folder: show packs added there.
+        Bind(wxEVT_ACTIVATE, [this](wxActivateEvent& e) {
+            if (e.GetActive()) {
+                ForgetSoundPackFiles();
+                FillPacks(SelectedPack());
+            }
+            e.Skip();
+        });
         return panel;
+    }
+
+    // "None" first, then every pack; selects `select` (kept in the list even if it is gone).
+    void FillPacks(const std::string& select) {
+        std::vector<std::string> names;
+        for (const auto& p : ListSoundPacks()) names.push_back(p.name);
+        if (!select.empty() && std::find(names.begin(), names.end(), select) == names.end()) names.push_back(select);
+        if (names == m_packNames && m_pack->GetCount() == names.size() + 1) return;
+        m_packNames = names;
+        m_pack->Clear();
+        m_pack->Append("None (built-in tones)");
+        m_pack->SetSelection(0);
+        for (size_t i = 0; i < names.size(); i++) {
+            bool missing = FindSoundPackFolder(names[i]).empty();
+            m_pack->Append(U(names[i]) + (missing ? " (not found)" : ""));
+            if (names[i] == select) m_pack->SetSelection(static_cast<int>(i) + 1);
+        }
+        m_events->SetSoundPack(SelectedPack());
+    }
+
+    std::string SelectedPack() const {
+        int i = m_pack->GetSelection();
+        return i > 0 ? m_packNames[i - 1] : std::string();
     }
 
     void OnOk(wxCommandEvent& e) {
@@ -426,6 +472,7 @@ private:
         StoreSpeech();
         m_work.sounds.enabled = m_soundsOn->GetValue();
         m_work.sounds.volume = m_soundVolume->GetValue();
+        m_work.sounds.pack = SelectedPack();
         m_events->Save();
 
         json windowState = AppSettings().windowState;
@@ -478,6 +525,8 @@ private:
     // sounds
     wxCheckBox* m_soundsOn;
     wxSlider* m_soundVolume;
+    wxChoice* m_pack;
+    std::vector<std::string> m_packNames;  // the choice's items after "None"
     EventSettingsPanel* m_events;
 };
 

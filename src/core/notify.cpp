@@ -1,5 +1,6 @@
 #include "core/notify.h"
 #include "core/sound.h"
+#include "core/soundpack.h"
 #include "core/speech.h"
 #include "core/util.h"
 
@@ -65,26 +66,53 @@ std::string ExpandTemplate(const std::string& text, const EventContext& context)
     return out;
 }
 
-static void PlaySoundFor(EventId id, const EventConfig& c) {
-    if (!c.soundFile.empty() && AppSound().PlayFile(c.soundFile)) return;
+std::string ResolveSoundPack(const ConversationSettings* conv) {
+    if (conv && conv->soundPack) return *conv->soundPack;
+    return AppSettings().sounds.pack;
+}
+
+std::string EventSoundFile(EventId id, const EventConfig& config, const std::string& pack,
+                           const std::vector<std::string>& variants) {
+    if (!config.soundFile.empty()) return config.soundFile;
+    std::string folder = FindSoundPackFolder(pack);
+    if (folder.empty()) return std::string();
+    std::string key = GetEventInfo(id).key;
+    std::vector<std::string> names;
+    for (const auto& v : variants) {
+        if (!v.empty()) names.push_back(key + "-" + v);
+    }
+    names.push_back(key);
+    return FindPackSound(folder, names);
+}
+
+static void PlaySoundFor(EventId id, const EventConfig& c, const std::string& pack, const std::vector<std::string>& variants) {
+    std::string file = EventSoundFile(id, c, pack, variants);
+    if (!file.empty() && AppSound().PlayFile(file)) return;
+    // A file of its own that would not play: the pack's sound before the tone.
+    if (!c.soundFile.empty()) {
+        EventConfig fromPack = c;
+        fromPack.soundFile.clear();
+        file = EventSoundFile(id, fromPack, pack, variants);
+        if (!file.empty() && AppSound().PlayFile(file)) return;
+    }
     const EventInfo& info = GetEventInfo(id);
     AppSound().PlayTone(info.tone1, info.tone2, info.toneMs);
 }
 
-void PreviewEventSound(EventId id, const EventConfig& config) {
-    PlaySoundFor(id, config);
+void PreviewEventSound(EventId id, const EventConfig& config, const std::string& pack) {
+    PlaySoundFor(id, config, pack, {});
 }
 
 void NotifyEvent(EventId id, const EventContext& context, const ConversationSettings* conv) {
     EventConfig c = ResolveEvent(id, conv);
     bool sounds = AppSettings().sounds.enabled;
     if (conv && conv->soundsEnabled) sounds = *conv->soundsEnabled;
-    if (sounds && c.soundEnabled) PlaySoundFor(id, c);
+    if (sounds && c.soundEnabled) PlaySoundFor(id, c, ResolveSoundPack(conv), context.soundVariants);
 
     EffectiveSpeech s = ResolveSpeech(conv);
     // Tool calls, their results and commands are only spoken when asked for;
     // a command waiting for approval is still announced, without the command.
-    if (!s.speakToolCalls && (id == EventId::ToolCall || id == EventId::ToolResult)) return;
+    if (!s.speakToolCalls && (id == EventId::ToolCall || id == EventId::ToolResult || id == EventId::ToolFailed)) return;
     EventContext spoken = context;
     if (!s.speakToolCalls && id == EventId::ApprovalNeeded) spoken.Set("summary", "").Set("tool", "");
     if (s.enabled && c.speakEnabled && !c.speechText.empty()) {
@@ -129,4 +157,5 @@ void SpeakOnRequest(const std::string& text, const ConversationSettings* conv) {
 void ApplyOutputSettings() {
     AppSpeech().Configure(AppSettings().speech);
     AppSound().SetVolume(AppSettings().sounds.volume);
+    ForgetSoundPackFiles();  // pick up packs added or changed meanwhile
 }

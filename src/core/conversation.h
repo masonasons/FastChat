@@ -88,7 +88,7 @@ struct SpeechOverrides {
 
 struct EventOverride {
     std::optional<bool> soundEnabled;
-    std::optional<std::string> soundFile;  // "" = the built-in tone
+    std::optional<std::string> soundFile;  // "" = the sound pack's, else the built-in tone
     std::optional<bool> speakEnabled;
     std::optional<std::string> speechText;
     bool Empty() const { return !soundEnabled && !soundFile && !speakEnabled && !speechText; }
@@ -103,6 +103,7 @@ struct ConversationSettings {
     std::string reasoningEffort;           // empty: default; "none", "low", "medium", "high", "xhigh", "max"
     std::string commandApproval;           // empty: global; "ask", "auto", "deny"
     std::optional<bool> soundsEnabled;
+    std::optional<std::string> soundPack;  // "" = no pack (built-in tones)
     SpeechOverrides speech;
     EventOverride events[static_cast<int>(EventId::Count)];
 };

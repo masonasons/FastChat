@@ -8,10 +8,14 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 struct EventContext {
     std::map<std::string, std::string> values;  // placeholder name -> text
     bool windowActive = true;                   // the conversation's window is in front
+    // Sound pack variants of the event's sound, most specific first ("edit",
+    // "command-git"...); the pack's file "<event>-<variant>" is played if it has one.
+    std::vector<std::string> soundVariants;
     EventContext& Set(const std::string& key, const std::string& value) {
         values[key] = value;
         return *this;
@@ -48,8 +52,17 @@ std::string PrepareForSpeech(const std::string& text);
 // Fill in {placeholders}.
 std::string ExpandTemplate(const std::string& text, const EventContext& context);
 
+// The sound pack a conversation uses (its own choice, else the global one);
+// "" for none.
+std::string ResolveSoundPack(const ConversationSettings* conv);
+
+// The file an event plays: its own file, else the pack's (the most specific
+// variant it has), else "" for the built-in tone.
+std::string EventSoundFile(EventId id, const EventConfig& config, const std::string& pack,
+                           const std::vector<std::string>& variants = {});
+
 // Play just the sound of an event configuration (settings dialog preview).
-void PreviewEventSound(EventId id, const EventConfig& config);
+void PreviewEventSound(EventId id, const EventConfig& config, const std::string& pack);
 
 // Apply the speech and sound settings (after they change).
 void ApplyOutputSettings();

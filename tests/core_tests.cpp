@@ -12,6 +12,7 @@
 #include "core/settings.h"
 #include "core/speech.h"
 #include "core/notify.h"
+#include "core/soundpack.h"
 #include "core/sse.h"
 #include "core/util.h"
 
@@ -986,6 +987,83 @@ static void TestDesktopMac() {
 }
 #endif
 
+// Sound packs in the (test) data folder: lookup, variants, and what wins.
+static void TestSoundPacks() {
+    std::string packs = UserSoundPacksFolder();
+    CHECK(StartsWith(packs, GetDataDir()));
+    std::string pack = JoinPath(packs, "Test Pack");
+    fs::create_directories(PathFromUtf8(pack));
+    for (const char* name : {"tool_call.wav", "tool_call-edit.wav", "tool_call-command-git.wav",
+                             "tool_call-command-git-commit.WAV", "response_complete.ogg", "notes.txt"}) {
+        WriteFileText(JoinPath(pack, name), "");
+    }
+    ForgetSoundPackFiles();
+    bool listed = false;
+    for (const auto& p : ListSoundPacks()) listed = listed || p.name == "Test Pack";
+    CHECK(listed);
+    CHECK_EQ(FindSoundPackFolder("test pack"), pack);
+    CHECK(FindSoundPackFolder("No such pack").empty());
+    CHECK(FindSoundPackFolder("").empty());
+
+    CHECK_EQ(ToolKind("Bash"), std::string("command"));
+    CHECK_EQ(ToolKind("edit_file"), std::string("edit"));
+    CHECK_EQ(ToolKind("MultiEdit"), std::string("edit"));
+    CHECK_EQ(ToolKind("Glob"), std::string("list"));
+    CHECK_EQ(ToolKind("mcp__github__search"), std::string("mcp"));
+    CHECK_EQ(ToolKind("click"), std::string());
+
+    auto words = [](const std::string& c) {
+        std::string out;
+        for (const auto& w : CommandWords(c)) out += (out.empty() ? "" : " ") + w;
+        return out;
+    };
+    CHECK_EQ(words("git commit -m \"a && b\""), std::string("git commit"));
+    CHECK_EQ(words("cd /d C:\\src && \"C:\\Program Files\\Python\\python.exe\" -m pytest"), std::string("python"));
+    CHECK_EQ(words("set FOO=1 & build.bat release"), std::string("build release"));
+    CHECK_EQ(words("FOO=1 make -j4"), std::string("make"));
+    CHECK_EQ(words("npm run build 2>&1 | tail -5"), std::string("npm run"));
+    CHECK_EQ(words("python script.py"), std::string("python"));
+    CHECK_EQ(words("cd src"), std::string());
+
+    std::vector<std::string> v = ToolSoundVariants("Bash", "git commit -m x");
+    CHECK(v.size() == 4 && v[0] == "command-git-commit" && v[1] == "command-git" && v[2] == "bash" && v[3] == "command");
+    v = ToolSoundVariants("run_command", "dir");
+    CHECK(v.size() == 3 && v[0] == "command-dir" && v[1] == "run_command" && v[2] == "command");
+    v = ToolSoundVariants("edit", "");
+    CHECK(v.size() == 1 && v[0] == "edit");
+
+    // The most specific sound the pack has; the plain one; none (the tone).
+    EventConfig c;
+    auto file = [&](EventId id, const std::string& tool, const std::string& command) {
+        std::string f = EventSoundFile(id, c, "Test Pack", ToolSoundVariants(tool, command));
+        return PathToUtf8(PathFromUtf8(f).filename());
+    };
+    CHECK_EQ(file(EventId::ToolCall, "Bash", "git commit -m x"), std::string("tool_call-command-git-commit.WAV"));
+    CHECK_EQ(file(EventId::ToolCall, "run_command", "cd x && git push"), std::string("tool_call-command-git.wav"));
+    CHECK_EQ(file(EventId::ToolCall, "edit_file", ""), std::string("tool_call-edit.wav"));
+    CHECK_EQ(file(EventId::ToolCall, "read_file", ""), std::string("tool_call.wav"));
+    CHECK_EQ(file(EventId::ResponseComplete, "", ""), std::string("response_complete.ogg"));
+    CHECK(EventSoundFile(EventId::MessageSent, c, "Test Pack").empty());
+    CHECK(EventSoundFile(EventId::ToolCall, c, "").empty());
+    CHECK(PackHasEventSound(pack, "tool_call"));
+    CHECK(!PackHasEventSound(pack, "tool_result"));
+    // A file chosen for the event beats the pack.
+    c.soundFile = "C:\\mine.wav";
+    CHECK_EQ(EventSoundFile(EventId::ToolCall, c, "Test Pack"), std::string("C:\\mine.wav"));
+
+    // A conversation's own pack, "" for none, or the global one.
+    AppSettings().sounds.pack = "Test Pack";
+    ConversationSettings s;
+    CHECK_EQ(ResolveSoundPack(&s), std::string("Test Pack"));
+    s.soundPack = std::string();
+    ConversationSettings back = ConversationSettingsFromJson(ConversationSettingsToJson(s));
+    CHECK(back.soundPack.has_value() && back.soundPack->empty());
+    CHECK(ResolveSoundPack(&back).empty());
+    CHECK(!ConversationSettingsFromJson(ConversationSettingsToJson(ConversationSettings())).soundPack.has_value());
+    AppSettings().sounds.pack.clear();
+    CHECK(EventFromKey("tool_failed") == EventId::ToolFailed);
+}
+
 int main() {
     std::string dir = PathToUtf8(fs::temp_directory_path() / ("fastchat-test-" + NewId().substr(0, 8)));
     fs::create_directories(PathFromUtf8(dir));
@@ -1001,6 +1079,10 @@ int main() {
     for (const auto& name : Speech::PrismBackendNames()) std::cout << " [" << name << "]";
     std::cout << "\n";
     if (Speech::SystemVoicesAvailable()) {
+#ifdef _WIN32
+        // SAPI is COM; in FastChat wxWidgets has set COM up on the UI thread.
+        HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+#endif
         // The system's own voices, without speaking: listed, and one can be chosen.
         std::vector<std::string> voices = Speech::ListVoices("system", "");
         std::cout << Speech::SystemVoicesName() << ": " << voices.size() << "\n";
@@ -1008,12 +1090,17 @@ int main() {
         auto backend = CreateSystemVoiceBackend();
         CHECK(backend && !voices.empty() && backend->SetVoice(voices.front()));
         CHECK(backend && !backend->SetVoice("No such voice"));
+#ifdef _WIN32
+        backend.reset();
+        if (SUCCEEDED(com)) CoUninitialize();
+#endif
     }
     TestUtil();
     TestSse();
     TestSecrets();
     TestDatabase(dir);
     TestCodeTools(dir);
+    TestSoundPacks();
 
     // Spoken templates: an emptied placeholder leaves no dangling colon.
     EventContext ctx;

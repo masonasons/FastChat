@@ -4,8 +4,11 @@
 #include "ui/dialogs.h"
 #include "ui/event_settings_panel.h"
 #include "ui/ui_util.h"
+#include "core/soundpack.h"
 #include "core/speech.h"
 #include "core/util.h"
+
+#include <algorithm>
 
 #include <wx/dirdlg.h>
 #include <wx/filename.h>
@@ -193,11 +196,41 @@ private:
         m_soundsOn = MakeTriChoice(panel, AppSettings().sounds.enabled);
         SetTriChoice(m_soundsOn, m_work.soundsEnabled);
         s->Add(LabeledRow(panel, "&Sounds:", m_soundsOn, 0), 0, wxALL, 6);
+
+        // Default (the global pack), None, then every pack.
+        m_pack = new wxChoice(panel, wxID_ANY);
+        const std::string& global = AppSettings().sounds.pack;
+        m_pack->Append(global.empty() ? wxString("Default (none)") : "Default (" + U(global) + ")");
+        m_pack->Append("None (built-in tones)");
+        for (const auto& p : ListSoundPacks()) m_packNames.push_back(p.name);
+        const std::optional<std::string>& own = m_work.soundPack;
+        if (own && !own->empty() && std::find(m_packNames.begin(), m_packNames.end(), *own) == m_packNames.end()) {
+            m_packNames.push_back(*own);
+        }
+        for (const auto& n : m_packNames) m_pack->Append(U(n) + (FindSoundPackFolder(n).empty() ? " (not found)" : ""));
+        m_pack->SetSelection(0);
+        if (own && own->empty()) m_pack->SetSelection(1);
+        for (size_t i = 0; own && i < m_packNames.size(); i++) {
+            if (m_packNames[i] == *own) m_pack->SetSelection(static_cast<int>(i) + 2);
+        }
+        s->Add(LabeledRow(panel, "Sound p&ack:", m_pack, 0), 0, wxALL, 6);
+
         m_events = new EventSettingsPanel(panel, m_work.events);
         s->Add(m_events, 1, wxEXPAND | wxALL, 6);
         panel->SetSizer(s);
+        m_events->SetSoundPack(EffectivePack());
+        m_pack->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { m_events->SetSoundPack(EffectivePack()); });
         return panel;
     }
+
+    std::optional<std::string> SelectedPack() const {
+        int i = m_pack->GetSelection();
+        if (i <= 0) return std::nullopt;
+        if (i == 1) return std::string();
+        return m_packNames[i - 2];
+    }
+
+    std::string EffectivePack() const { return SelectedPack().value_or(AppSettings().sounds.pack); }
 
     void OnOk(wxCommandEvent& e) {
         if (m_folder && !wxFileName::DirExists(m_folder->GetValue())) {
@@ -232,6 +265,7 @@ private:
         if (m_rateOwn->GetValue()) o.rate = m_rate->GetValue();
         else o.rate.reset();
         m_work.soundsEnabled = GetTriChoice(m_soundsOn);
+        m_work.soundPack = SelectedPack();
         m_events->Save();
         m_conv.settings = m_work;
         e.Skip();
@@ -260,6 +294,8 @@ private:
     wxCheckBox* m_rateOwn = nullptr;
     wxSlider* m_rate = nullptr;
     wxChoice* m_soundsOn;
+    wxChoice* m_pack;
+    std::vector<std::string> m_packNames;  // the choice's items after "Default" and "None"
     EventSettingsPanel* m_events;
 };
 

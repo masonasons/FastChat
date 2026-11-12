@@ -19,6 +19,9 @@ public:
     // Write the controls back into the arrays given at construction.
     void Save();
 
+    // The sound pack the events play from ("" for none), for the list and Play.
+    void SetSoundPack(const std::string& pack);
+
 private:
     void Build();
     void Load(int index);
@@ -35,6 +38,7 @@ private:
     EventConfig m_workConfigs[static_cast<int>(EventId::Count)];
     EventOverride m_workOverrides[static_cast<int>(EventId::Count)];
     int m_current = -1;
+    std::string m_pack;
 
     wxListBox* m_list = nullptr;
     // global

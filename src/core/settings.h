@@ -66,6 +66,7 @@ struct SpeechSettings {
 struct SoundSettings {
     bool enabled = true;
     int volume = 80;                  // 0-100
+    std::string pack;                 // sound pack name; empty: none (built-in tones)
 };
 
 class Settings {

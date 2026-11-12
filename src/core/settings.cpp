@@ -82,6 +82,7 @@ bool Settings::Load() {
     if (auto it = root.find("sounds"); it != root.end()) {
         Get(*it, "enabled", sounds.enabled);
         Get(*it, "volume", sounds.volume);
+        Get(*it, "pack", sounds.pack);
     }
     if (auto it = root.find("events"); it != root.end() && it->is_object()) {
         for (auto& [key, value] : it->items()) {
@@ -157,7 +158,7 @@ bool Settings::Save() const {
         {"ctrlStops", speech.ctrlStops},
         {"announceWith", speech.announceWith},
     };
-    root["sounds"] = {{"enabled", sounds.enabled}, {"volume", sounds.volume}};
+    root["sounds"] = {{"enabled", sounds.enabled}, {"volume", sounds.volume}, {"pack", sounds.pack}};
     json ev = json::object();
     for (int i = 0; i < static_cast<int>(EventId::Count); i++) {
         const EventConfig& e = events[i];
