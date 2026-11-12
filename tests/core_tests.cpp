@@ -5,6 +5,7 @@
 #include "core/chat_engine.h"
 #include "core/code_tools.h"
 #include "core/computer_tools.h"
+#include "core/conversation_import.h"
 #include "core/desktop.h"
 #include "core/database.h"
 #include "core/platform.h"
@@ -1205,6 +1206,151 @@ static void TestSoundPackImport(const std::string& dir) {
     }
 }
 
+// Basilisk conversations (.bskc: a zip with conversation.json and attachments).
+static void TestBasiliskImport(const std::string& dir) {
+    std::cout << "Basilisk import:\n";
+    CHECK_EQ(ParseIsoTime("1970-01-01T00:00:10Z"), int64_t{10});
+    CHECK_EQ(ParseIsoTime("1970-01-01T01:00:10+01:00"), int64_t{10});
+    CHECK_EQ(ParseIsoTime("1970-01-01T00:00:10.123-00:30"), int64_t{1810});
+    std::tm tm{};
+    tm.tm_year = 126;
+    tm.tm_mon = 10;
+    tm.tm_mday = 8;
+    tm.tm_hour = 16;
+    tm.tm_min = 15;
+    tm.tm_sec = 20;
+    tm.tm_isdst = -1;
+    int64_t local = static_cast<int64_t>(std::mktime(&tm));
+    CHECK_EQ(ParseIsoTime("2026-11-08T16:15:20.483556"), local);  // no zone: local time
+    CHECK_EQ(ParseIsoTime("not a time"), int64_t{0});
+
+    json model = {{"provider_id", "openrouter"}, {"model_id", "google/gemini-4-argon"}};
+    json conv = {
+        {"version", 3},
+        {"title", nullptr},
+        {"systems", {{{"role", "system"}, {"content", "Be brief."}}, {{"role", "system"}, {"content", "Be Taylor."}}}},
+        {"messages",
+         {{{"request", {{"role", "user"}, {"content", "hello"}, {"attachments", json::array()}, {"citations", nullptr}}},
+           {"response", {{"role", "assistant"}, {"content", "hi"}, {"attachments", nullptr}, {"citations", nullptr}}},
+           {"system_index", 0}, {"model", model}, {"temperature", 0.7}, {"max_tokens", 0}, {"top_p", 1.0}, {"stream", true},
+           {"created_at", "2026-11-08T16:15:20.483556"}, {"updated_at", "2026-11-08T16:15:25.000001"}},
+          {{"request",
+            {{"role", "user"},
+             {"content", "look"},
+             {"attachments",
+              {{{"location", {{"protocol", "zip"}, {"path", "attachments/pic.png"}, {"storage_options", json::object()}}},
+                {"name", "pic.png"}, {"mime_type", "image/png"}, {"description", "a cat"}},
+               {{"location", {{"protocol", "zip"}, {"path", "attachments/notes.txt"}, {"storage_options", json::object()}}},
+                {"name", "notes.txt"}, {"mime_type", "text/plain"}},
+               {{"location", "https://example.com/a.png"}, {"name", "a.png"}, {"mime_type", "image/png"}},
+               {{"location", {{"protocol", "zip"}, {"path", "attachments/doc.pdf"}, {"storage_options", json::object()}}},
+                {"name", "doc.pdf"}, {"mime_type", "application/pdf"}}}}}},
+           {"response", {{"role", "assistant"}, {"content", "a cat"}, {"citations", {{{"title", "Cats"}, {"url", "https://cats.example"}}}}}},
+           {"system_index", 1}, {"model", model}, {"temperature", 0.7}, {"max_tokens", 0},
+           {"created_at", "2026-11-08T16:16:00"}, {"updated_at", "2026-11-08T16:16:05"}},
+          {{"request", {{"role", "user"}, {"content", "bye"}, {"attachments", nullptr}}},
+           {"response", nullptr},
+           {"system_index", 1}, {"model", {{"provider_id", "unknownai"}, {"model_id", "x-1"}}}, {"temperature", 0.7},
+           {"max_tokens", 2000}, {"created_at", "2026-11-08T16:17:00"}}}}};
+    std::string bskc = JoinPath(dir, "Chat with Taylor.bskc");
+    WriteZip(bskc, {{"conversation.json", conv.dump()},
+                    {"attachments/pic.png", "PNG!"},
+                    {"attachments/notes.txt", "hello"},
+                    {"attachments/doc.pdf", "%PDF"}});
+
+    ImportedConversation imp;
+    std::string error;
+    CHECK(ImportConversationFile(bskc, imp, error));
+    if (!error.empty()) std::cerr << "    error: " << error << "\n";
+    const Conversation& c = imp.conversation;
+    CHECK_EQ(imp.source, std::string("Basilisk"));
+    CHECK_EQ(c.title, std::string("Chat with Taylor"));  // no title: the file's name
+    CHECK(c.type == ConversationType::Chat);
+    CHECK_EQ(c.settings.systemPrompt.value_or("(none)"), std::string("Be Taylor."));  // the last exchange's
+    CHECK(c.settings.temperature && std::abs(*c.settings.temperature - 0.7) < 1e-9);
+    CHECK_EQ(c.settings.maxTokens.value_or(0), 2000);
+    CHECK(c.settings.providerId.empty());  // no provider of those kinds here
+    CHECK_EQ(c.createdAt, local);
+    CHECK_EQ(imp.exchanges, 3);
+    const auto& ms = imp.messages;
+    CHECK_EQ(ms.size(), size_t{8});
+    if (ms.size() == 8) {
+        // Where it came from, and what did not come over.
+        CHECK(GetNoteKind(ms[0]) == NoteKind::Note);
+        CHECK(ms[0].content.find("Imported from Basilisk: 3 messages") != std::string::npos);
+        CHECK(ms[0].content.find("unknownai") != std::string::npos);
+        CHECK(ms[0].content.find("doc.pdf") != std::string::npos);
+        // The first exchange had another system prompt: kept in a note.
+        CHECK(GetNoteKind(ms[1]) == NoteKind::Note && ms[1].content.find("Be brief.") != std::string::npos);
+        CHECK(ms[2].role == Role::User && ms[2].content == "hello" && ms[2].createdAt == local);
+        CHECK(ms[3].role == Role::Assistant && ms[3].content == "hi" && ms[3].model == "google/gemini-4-argon");
+        CHECK_EQ(ms[3].createdAt, local + 5);
+        CHECK(GetNoteKind(ms[4]) == NoteKind::Note && ms[4].content.find("the one this conversation uses now") != std::string::npos);
+        // Attachments: the image goes with the message, text files into it, the rest named.
+        CHECK(ms[5].role == Role::User);
+        CHECK(StartsWith(ms[5].content, "look"));
+        CHECK(ms[5].content.find("[Attached file: notes.txt]\nhello") != std::string::npos);
+        CHECK(ms[5].content.find("[Attached: https://example.com/a.png]") != std::string::npos);
+        CHECK(ms[5].content.find("not imported: doc.pdf") != std::string::npos);
+        CHECK_EQ(ms[5].images.size(), size_t{1});
+        if (!ms[5].images.empty()) {
+            CHECK_EQ(ms[5].images[0].mediaType, std::string("image/png"));
+            CHECK_EQ(Base64Decode(ms[5].images[0].base64), std::string("PNG!"));
+        }
+        CHECK_EQ(ms[6].content, std::string("a cat\n\nSources:\n- Cats: https://cats.example"));
+        CHECK(ms[7].role == Role::User && ms[7].content == "bye");  // no reply came
+    }
+    // Notes are never sent; the model gets the exchanges.
+    CHECK_EQ(ContextMessages(ms).size(), size_t{5});
+
+    // Saved in one go, images and all.
+    Database db;
+    CHECK(db.Open(JoinPath(dir, "import.db")));
+    Conversation saved = imp.conversation;
+    std::vector<Message> toSave = imp.messages;
+    CHECK(db.CreateConversationWithMessages(saved, toSave));
+    std::vector<Message> loaded = db.LoadMessages(saved.id);
+    CHECK_EQ(loaded.size(), size_t{8});
+    if (loaded.size() == 8) CHECK_EQ(loaded[5].images.size(), size_t{1});
+    db.Close();
+
+    // An older Basilisk file: one system prompt for the whole conversation.
+    json old = {{"version", 1},
+                {"title", "Old one"},
+                {"system", {{"role", "system"}, {"content", "Old prompt"}}},
+                {"messages", {{{"request", {{"role", "user"}, {"content", "q"}}},
+                               {"response", {{"role", "assistant"}, {"content", "a"}}},
+                               {"model", {{"provider_id", "openai"}, {"model_id", "gpt-4o"}}}}}}};
+    ImportedConversation oldImp;
+    CHECK(ImportBasiliskJson(old.dump(), nullptr, "file", oldImp, error));
+    CHECK_EQ(oldImp.conversation.title, std::string("Old one"));
+    CHECK_EQ(oldImp.conversation.settings.systemPrompt.value_or("(none)"), std::string("Old prompt"));
+    CHECK_EQ(oldImp.messages.size(), size_t{3});  // the note, the question, the answer
+    CHECK(!oldImp.conversation.settings.temperature);  // Basilisk's default 1: left to the model
+
+    // Not a conversation.
+    std::string notOne = JoinPath(dir, "plain.bskc");
+    WriteFileText(notOne, "plain text");
+    CHECK(!ImportConversationFile(notOne, oldImp, error) && !error.empty());
+
+    // A real one, when asked for: only counts are printed.
+    if (const char* real = std::getenv("FASTCHAT_TEST_BSKC"); real && *real) {
+        ImportedConversation r;
+        bool ok = ImportConversationFile(real, r, error);
+        CHECK(ok);
+        if (!ok) std::cerr << "    error: " << error << "\n";
+        int notes = 0, images = 0;
+        for (const auto& m : r.messages) {
+            if (GetNoteKind(m) != NoteKind::None) notes++;
+            images += static_cast<int>(m.images.size());
+        }
+        std::cout << "  real file: " << r.exchanges << " exchanges, " << r.messages.size() << " rows, " << notes
+                  << " notes, " << images << " images, system prompt " << (r.conversation.settings.systemPrompt ? r.conversation.settings.systemPrompt->size() : 0)
+                  << " chars, provider " << (r.conversation.settings.providerId.empty() ? "none" : "matched") << "\n";
+        std::cout << "  first note: " << OneLine(r.messages.empty() ? std::string() : r.messages[0].content, 400) << "\n";
+    }
+}
+
 int main() {
     std::string dir = PathToUtf8(fs::temp_directory_path() / ("fastchat-test-" + NewId().substr(0, 8)));
     fs::create_directories(PathFromUtf8(dir));
@@ -1243,6 +1389,7 @@ int main() {
     TestCodeTools(dir);
     TestSoundPacks();
     TestSoundPackImport(dir);
+    TestBasiliskImport(dir);
 
     // Spoken templates: an emptied placeholder leaves no dangling colon.
     EventContext ctx;

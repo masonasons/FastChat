@@ -2,7 +2,7 @@
 #include "core/platform.h"
 #include "core/util.h"
 
-#include <miniz.h>
+#include "core/zip.h"
 
 #include <algorithm>
 #include <cstring>
@@ -191,49 +191,21 @@ void ForgetSoundPackFiles() {
 
 namespace {
 
-// A zip read into memory: FastChat's own file reading copes with any path.
-class ZipReader {
-public:
-    ~ZipReader() {
-        if (m_open) mz_zip_reader_end(&m_zip);
-    }
-    bool Open(const std::string& path, std::string& error) {
-        if (!ReadFileText(path, m_data)) {
-            error = "Could not open " + path + ".";
-            return false;
-        }
-        if (!mz_zip_reader_init_mem(&m_zip, m_data.data(), m_data.size(), 0)) {
-            error = path + " could not be read as a zip (" + mz_zip_get_error_string(mz_zip_get_last_error(&m_zip)) + ").";
-            return false;
-        }
-        m_open = true;
-        return true;
-    }
-    mz_zip_archive* Zip() { return &m_zip; }
-    mz_uint Count() { return mz_zip_reader_get_num_files(&m_zip); }
+std::string ZipBaseName(const std::string& path) {
+    size_t slash = path.find_last_of('/');
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
 
-    // Entry i's path ("a/b.wav"), if it is a sound to take: not a folder, and
-    // not one of the Mac's resource fork copies.
-    bool SoundEntry(mz_uint i, std::string& path) {
-        mz_zip_archive_file_stat st;
-        if (!mz_zip_reader_file_stat(&m_zip, i, &st) || st.m_is_directory) return false;
-        path = ReplaceAll(SanitizeUtf8(st.m_filename), "\\", "/");
-        std::string base = BaseName(path);
-        if (StartsWith(path, "__MACOSX/") || StartsWith(base, "._")) return false;
-        size_t dot = base.find_last_of('.');
-        return dot != std::string::npos && IsSoundExtension(base.substr(dot));
-    }
-
-    static std::string BaseName(const std::string& path) {
-        size_t slash = path.find_last_of('/');
-        return slash == std::string::npos ? path : path.substr(slash + 1);
-    }
-
-private:
-    std::string m_data;
-    mz_zip_archive m_zip{};
-    bool m_open = false;
-};
+// Entry i's path ("a/b.wav"), if it is a sound to take: not a folder, and not
+// one of the Mac's resource fork copies.
+bool SoundEntry(const ZipFile& zip, int i, std::string& path) {
+    if (zip.IsFolder(i)) return false;
+    path = zip.Name(i);
+    std::string base = ZipBaseName(path);
+    if (StartsWith(path, "__MACOSX/") || StartsWith(base, "._")) return false;
+    size_t dot = base.find_last_of('.');
+    return dot != std::string::npos && IsSoundExtension(base.substr(dot));
+}
 
 // A name that is safe as one folder name.
 std::string CleanPackName(std::string name) {
@@ -249,14 +221,14 @@ std::string CleanPackName(std::string name) {
 }  // namespace
 
 std::string SoundPackNameForZip(const std::string& zipPath) {
-    ZipReader zip;
+    ZipFile zip;
     std::string error;
     if (!zip.Open(zipPath, error)) return std::string();
     std::set<std::string> tops;
     bool any = false, atRoot = false;
-    for (mz_uint i = 0; i < zip.Count(); i++) {
+    for (int i = 0; i < zip.Count(); i++) {
         std::string path;
-        if (!zip.SoundEntry(i, path)) continue;
+        if (!SoundEntry(zip, i, path)) continue;
         any = true;
         size_t slash = path.find('/');
         if (slash == std::string::npos) atRoot = true;
@@ -275,7 +247,7 @@ SoundPackImport ImportSoundPackZip(const std::string& zipPath, const std::string
         r.error = "The sound pack needs a name.";
         return r;
     }
-    ZipReader zip;
+    ZipFile zip;
     if (!zip.Open(zipPath, r.error)) return r;
 
     std::string root = UserSoundPacksFolder();
@@ -299,19 +271,13 @@ SoundPackImport ImportSoundPackZip(const std::string& zipPath, const std::string
     };
 
     std::set<std::string> written;
-    for (mz_uint i = 0; i < zip.Count(); i++) {
+    for (int i = 0; i < zip.Count(); i++) {
         std::string path;
-        if (!zip.SoundEntry(i, path)) continue;
-        std::string base = ZipReader::BaseName(path);
+        if (!SoundEntry(zip, i, path)) continue;
+        std::string base = ZipBaseName(path);
         if (!written.insert(ToLower(base)).second) continue;  // the first of the same name wins
-        size_t size = 0;
-        void* data = mz_zip_reader_extract_to_heap(zip.Zip(), i, &size, 0);
-        if (!data) {
-            return fail("Could not unpack " + path + " from the zip (" +
-                        mz_zip_get_error_string(mz_zip_get_last_error(zip.Zip())) + ").");
-        }
-        std::string bytes(static_cast<const char*>(data), size);
-        mz_free(data);
+        std::string bytes, error;
+        if (!zip.Read(i, bytes, error)) return fail(error);
         std::string target = JoinPath(temp, base);
         if (!WriteFileText(target, bytes)) return fail("Could not write " + target + ".");
         r.sounds++;

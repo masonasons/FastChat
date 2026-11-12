@@ -296,6 +296,9 @@ wxString ConversationFrame::RowText(int index) const {
     switch (m.role) {
         case Role::User:
             text = "You: " + OneLine(m.content);
+            if (!m.images.empty()) {
+                text += m.images.size() == 1 ? std::string(", with an image") : ", with " + std::to_string(m.images.size()) + " images";
+            }
             break;
         case Role::System:
             switch (GetNoteKind(m)) {
@@ -1344,6 +1347,10 @@ void ConversationFrame::ViewMessage(int index) {
         case Role::User:
             title = "Your message";
             text = m.content;
+            if (!m.images.empty()) {
+                text += "\n\n(" + (m.images.size() == 1 ? std::string("An image goes") : std::to_string(m.images.size()) + " images go") +
+                        " to the model with this message.)";
+            }
             break;
         case Role::System:
             if (GetNoteKind(m) == NoteKind::Error) {

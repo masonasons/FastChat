@@ -24,6 +24,9 @@ public:
     bool UpdateConversation(const Conversation& c); // title, folder, pinned, settings, updated time
     bool TouchConversation(int64_t id);
     bool DeleteConversation(int64_t id);
+    // A new conversation with all its messages (an import), in one transaction:
+    // all of it is saved, or none.
+    bool CreateConversationWithMessages(Conversation& c, std::vector<Message>& messages);
 
     std::vector<Message> LoadMessages(int64_t conversationId);
     bool AddMessage(Message& m);                    // fills in id (and createdAt if 0)

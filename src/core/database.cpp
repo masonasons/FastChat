@@ -214,6 +214,23 @@ bool Database::CreateConversation(Conversation& c) {
     return true;
 }
 
+bool Database::CreateConversationWithMessages(Conversation& c, std::vector<Message>& messages) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (!m_db || !Exec("BEGIN")) return false;
+    bool ok = CreateConversation(c);
+    for (auto& m : messages) {
+        if (!ok) break;
+        m.conversationId = c.id;
+        ok = AddMessage(m);
+    }
+    if (ok && Exec("COMMIT")) return true;
+    std::string error = m_error;
+    Exec("ROLLBACK");
+    m_error = error;
+    c.id = 0;
+    return false;
+}
+
 bool Database::UpdateConversation(const Conversation& c) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (!m_db) return false;

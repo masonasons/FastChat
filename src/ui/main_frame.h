@@ -40,6 +40,7 @@ private:
     void OnConversationSettings(wxCommandEvent&);
     void OnOpenFolder(wxCommandEvent&);
     void OnExport(wxCommandEvent&);
+    void OnImport(wxCommandEvent&);
     void OnSettings(wxCommandEvent&);
     void OnAccount(wxCommandEvent&);
     void OnAbout(wxCommandEvent&);

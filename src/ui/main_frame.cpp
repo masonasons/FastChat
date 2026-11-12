@@ -2,6 +2,7 @@
 #include "ui/conversation_frame.h"
 #include "ui/dialogs.h"
 #include "ui/ui_util.h"
+#include "core/conversation_import.h"
 #include "core/database.h"
 #include "core/notify.h"
 #include "core/platform.h"
@@ -26,6 +27,7 @@ enum {
     ID_CONV_SETTINGS,
     ID_OPEN_FOLDER,
     ID_EXPORT,
+    ID_IMPORT,
     ID_ACCOUNT,
     ID_SEARCH_FOCUS,
     ID_LIST_FOCUS,
@@ -88,6 +90,7 @@ MainFrame::MainFrame() : wxFrame(nullptr, wxID_ANY, APP_NAME, wxDefaultPosition,
     Bind(wxEVT_MENU, &MainFrame::OnConversationSettings, this, ID_CONV_SETTINGS);
     Bind(wxEVT_MENU, &MainFrame::OnOpenFolder, this, ID_OPEN_FOLDER);
     Bind(wxEVT_MENU, &MainFrame::OnExport, this, ID_EXPORT);
+    Bind(wxEVT_MENU, &MainFrame::OnImport, this, ID_IMPORT);
     Bind(wxEVT_MENU, &MainFrame::OnSettings, this, ID_SETTINGS);
     Bind(wxEVT_BUTTON, &MainFrame::OnSettings, this, ID_SETTINGS);
     Bind(wxEVT_MENU, &MainFrame::OnAccount, this, ID_ACCOUNT);
@@ -137,6 +140,7 @@ void MainFrame::BuildMenu() {
     auto* file = new wxMenu();
     file->Append(ID_NEW, "&New conversation...\tCtrl+N");
     file->Append(ID_OPEN, "&Open\tCtrl+O");
+    file->Append(ID_IMPORT, "&Import conversation...\tCtrl+I");
     file->AppendSeparator();
     file->Append(ID_SETTINGS, "&Settings...\tCtrl+,");
     file->Append(ID_ACCOUNT, "&Account and credits...\tCtrl+Shift+A");
@@ -473,6 +477,28 @@ void MainFrame::OnExport(wxCommandEvent&) {
     std::string text = ConversationToText(*c, AppDatabase().LoadMessages(c->id));
     if (!WriteFileText(S(dlg.GetPath()), text)) ShowError(this, "The file could not be written.");
     else SetStatusText("Exported", 0);
+}
+
+// Another app's conversation (Basilisk's .bskc) becomes a new conversation, opened.
+void MainFrame::OnImport(wxCommandEvent&) {
+    wxFileDialog dlg(this, "Import a conversation", "", "", ImportFileFilter(), wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    if (dlg.ShowModal() != wxID_OK) return;
+    ImportedConversation imported;
+    std::string error;
+    bool ok;
+    {
+        wxBusyCursor busy;
+        ok = ImportConversationFile(S(dlg.GetPath()), imported, error) &&
+             AppDatabase().CreateConversationWithMessages(imported.conversation, imported.messages);
+        if (!ok && error.empty()) error = "It could not be saved: " + AppDatabase().LastError();
+    }
+    if (!ok) {
+        ShowError(this, "The conversation was not imported. " + U(error));
+        return;
+    }
+    RefreshList(imported.conversation.id);
+    SetStatusText("Imported " + U(DisplayTitle(imported.conversation)) + " from " + U(imported.source), 0);
+    OpenConversation(imported.conversation.id);
 }
 
 void MainFrame::OnSettings(wxCommandEvent&) {
