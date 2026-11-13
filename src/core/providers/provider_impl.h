@@ -10,6 +10,7 @@ std::unique_ptr<Provider> CreateGeminiProvider(const ProviderConfig& config);
 std::unique_ptr<Provider> CreateOllamaProvider(const ProviderConfig& config);
 std::unique_ptr<Provider> CreateClaudeCodeProvider(const ProviderConfig& config);
 std::unique_ptr<Provider> CreateCodexProvider(const ProviderConfig& config);
+std::unique_ptr<Provider> CreateFreebuffProvider(const ProviderConfig& config);
 
 // For the coding agents:
 // What to send as the user's message: the new message alone when resuming a

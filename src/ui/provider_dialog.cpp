@@ -10,6 +10,7 @@
 #include <wx/filedlg.h>
 #include <wx/hyperlink.h>
 
+#include <filesystem>
 #include <thread>
 
 namespace {
@@ -132,14 +133,15 @@ private:
         m_description->SetLabel(k.description);
         m_description->Wrap(600);
         if (setName) m_name->ChangeValue(k.displayName);
-        bool agent = k.style == ApiStyle::ClaudeCode || k.style == ApiStyle::Codex;
+        bool agent = k.style == ApiStyle::ClaudeCode || k.style == ApiStyle::Codex || k.style == ApiStyle::Freebuff;
         m_browseProgram->Show(agent);
         if (agent) {
-            const char* program = k.style == ApiStyle::ClaudeCode ? "claude" : "codex";
+            const char* program =
+                k.style == ApiStyle::ClaudeCode ? "claude" : k.style == ApiStyle::Codex ? "codex" : "freebuff";
             std::string found = FindProgram(program);
             m_urlLabel->SetLabel("&Program:");
-            m_url->SetHint(found.empty() ? wxString::Format("Not found: install %s, or choose the program", program)
-                                         : "Empty: " + U(found));
+            wxString missing = wxString::Format("Not found: install %s, or choose the program", program);
+            m_url->SetHint(found.empty() ? missing : "Empty: " + U(found));
         } else {
             m_urlLabel->SetLabel("Base &URL:");
             m_url->SetHint(wxString("Default: ") + k.defaultBaseUrl);
@@ -148,13 +150,16 @@ private:
         m_adminLabel->Show(admin);
         m_admin->Show(admin);
         if (admin) m_adminLabel->SetLabel(wxString(k.adminKeyLabel) + ":");
-        if (agent) m_keyLabel->SetLabel("API &key (optional; empty uses your login):");
+        if (k.style == ApiStyle::Freebuff) m_keyLabel->SetLabel("API &key (not used; Freebuff uses its own login):");
+        else if (agent) m_keyLabel->SetLabel("API &key (optional; empty uses your login):");
         else m_keyLabel->SetLabel(k.needsApiKey ? "API &key:" : "API &key (if the server needs one):");
         bool hasLink = k.keyPageUrl && *k.keyPageUrl;
         m_link->Show(hasLink);
         if (hasLink) {
             m_link->SetURL(k.keyPageUrl);
-            m_link->SetLabel(wxString("Get a key: ") + k.keyPageUrl);
+            // Coding agents have no key here: the link is where to install them.
+            m_link->SetLabel(agent ? wxString("Install ") + U(k.displayName) + ": " + k.keyPageUrl
+                                   : wxString("Get a key: ") + k.keyPageUrl);
         }
         m_model->SetHint(k.defaultModel && *k.defaultModel ? wxString("Default: ") + k.defaultModel
                                                            : wxString("Choose after testing the connection"));

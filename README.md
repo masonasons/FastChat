@@ -60,12 +60,12 @@ providers, written in C++ with wxWidgets.
   FastChat asks before every action (Allow / Don't allow, with an option to
   allow the rest of the conversation), never acts on its own windows, and sends
   nothing unless the target app is really in front. Ctrl+Alt+Escape
-  (Control+Option+Escape on the Mac) stops it from any window. Coding agents (Claude Code, Codex) can't drive it; use a
+  (Control+Option+Escape on the Mac) stops it from any window. Coding agents (Claude Code, Codex, Freebuff) can't drive it; use a
   model from an API provider.
 - **Providers** (Settings > Providers): OpenAI, Anthropic, Google Gemini,
   OpenRouter, Ollama Cloud, Ollama on your own machine, DeepSeek, Groq, Mistral,
-  xAI, any OpenAI-compatible server, and the coding agents **Claude Code** and
-  **Codex CLI**, run on this computer with your own login. Each lists its models with context
+  xAI, any OpenAI-compatible server, and the coding agents **Claude Code**,
+  **Codex CLI** and **Freebuff CLI**, run on this computer with your own login. Each lists its models with context
   length and prices where the service gives them, and reports what it can about
   the account:
   - OpenRouter: credits remaining, purchased and used; the key's limit and its
@@ -77,8 +77,9 @@ providers, written in C++ with wxWidgets.
   - Claude Code: your login and plan, and plan usage (for example "50% used,
     seven-day window") as it reports it, shown in the status bar.
   - Codex: your login status.
+  - Freebuff: whether you are logged in, from its own config folder.
   - Every provider: the rate-limit headers of the last response.
-- **Coding agents** (Claude Code, Codex) run their own tools in code
+- **Coding agents** (Claude Code, Codex, Freebuff) run their own tools in code
   conversations. Claude Code's approval requests become FastChat's Allow / Don't
   allow dialog. FastChat starts it in its default permission mode while asking
   is on, even if your own settings use auto mode; your CLAUDE.md, MCP servers
@@ -96,9 +97,18 @@ providers, written in C++ with wxWidgets.
   answer, check boxes for any number) with a box for an answer in your own
   words; Answer sends your choices back, Don't answer tells it you declined.
   Questions are always asked, even with everything allowed, and have their own
-  event (Question for you). Codex can't ask in headless mode, so it gets file
-  edits inside the folder only, with no network access. Each reply keeps the
-  agent's session id, so the next message resumes that session.
+  event (Question for you). Codex cannot ask in headless mode, so it gets file
+  edits inside the folder only, with no network access; Freebuff asks in its own
+  question box, which becomes the Questions dialog. Each reply keeps the
+  agent's session id, so the next message resumes that session. Freebuff has no
+  headless mode at all, so it is driven the way BlindPilot drives it: its own
+  terminal interface runs in a pseudo-terminal off screen, the prompt is typed
+  into its composer, and the answer is taken from the chat Freebuff saves
+  (`~/.config/manicode/projects`); its screen is watched for the composer, the
+  model picker and its questions while the turn runs.
+  Freebuff is looked for on the PATH and in
+  npm's, Volta's, bun's, pnpm's, Yarn's, Scoop's and Homebrew's folders (%APPDATA%\npm,
+  %LOCALAPPDATA%\Volta\bin and the like), not only the PATH FastChat started with.
 - **Speech and sounds**: every event (message sent, response started, thinking,
   complete, error, tool call, tool result, tool failed, command approval, and
   more) can play a sound (a file, a sound pack's, or a built-in tone) and speak
@@ -140,7 +150,8 @@ providers, written in C++ with wxWidgets.
   pasting a copied image or files with Ctrl+V, or dropping files on the window.
   They wait in the Attachments list under the message box (Delete removes one).
   Images and PDFs go to the model as themselves (OpenAI-style APIs, Anthropic,
-  Gemini; Ollama takes images only; Claude Code takes both; Codex takes images),
+  Gemini; Ollama takes images only; Claude Code and Codex take both, Freebuff is given
+  their names and paths),
   text files go into the message's text. Your messages' rows name what went
   with them, and Edit and resend brings the attachments back.
 - **Updates**: every change to FastChat is built and published as the
@@ -257,7 +268,7 @@ call some Windows 8 and 10 functions; [YY-Thunks](https://github.com/Chuyu-Team/
 (linked in, along with `src/core/platform/win7_compat.cpp` for the one it lacks)
 stands in for them, calling the real function wherever Windows has it. On
 Windows 7 the OneCore voices are missing (they are Windows 10's), as are Claude
-Code and Codex (their programs need Windows 10); speech goes through the screen
+Code, Codex and Freebuff (their programs need Windows 10); speech goes through the screen
 reader or SAPI. Secure connections there need the TLS 1.2 update for WinHTTP
 (KB3140245, part of the convenience rollup). `-DFASTCHAT_WIN7=OFF` leaves
 YY-Thunks out. `tests\check_win7.ps1` checks that the exe asks Windows for
@@ -298,7 +309,7 @@ On the Mac:
   the macOS voices (Settings > Speech > Engine) with their own voice, rate and
   volume.
 - FastChat takes the PATH your shell sets up (as Terminal has it), so Claude
-  Code, Codex, Homebrew's tools and the commands of code conversations are found
+  Code, Codex, Freebuff, Homebrew's tools and the commands of code conversations are found
   even when it is opened from the Finder.
 - Data lives in `~/Library/Application Support/FastChat`. API keys are only
   obfuscated there, not encrypted; the settings file is readable by you alone.
@@ -329,9 +340,9 @@ On the Mac: `./build.sh tests`, `python3 tests/mock_server.py 8765 &`, then
 `FASTCHAT_MOCK=http://127.0.0.1:8765 build/fastchat_tests`.
 
 `mock_server.py` imitates the OpenAI, Anthropic, Gemini and Ollama streaming
-APIs, and `fake_claude.py` / `fake_codex.py` imitate the two coding agents, so
-the providers, tool loops, approvals and account reports are tested without
-keys. The desktop tests drive a small window of their own through accessibility
+APIs, and `fake_claude.py` / `fake_codex.py` / `fake_freebuff.py` imitate the
+coding agents, so the providers, tool loops, approvals and account reports are
+tested without keys. The desktop tests drive a small window of their own through accessibility
 only; set `FASTCHAT_TEST_INPUT=1` to also send it real keystrokes and a click
 (it takes the foreground for a moment). Set `FASTCHAT_REAL_CLAUDE=1` to also run
 a short real Claude Code session

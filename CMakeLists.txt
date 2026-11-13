@@ -176,6 +176,7 @@ endif()
 # The core: everything but the windows (providers, storage, speech, sounds).
 set(FASTCHAT_CORE_SOURCES
     src/core/util.cpp
+    src/core/terminal_screen.cpp
     src/core/sse.cpp
     src/core/settings.cpp
     src/core/database.cpp
@@ -201,6 +202,7 @@ set(FASTCHAT_CORE_SOURCES
     src/core/providers/ollama.cpp
     src/core/providers/claude_code.cpp
     src/core/providers/codex.cpp
+    src/core/providers/freebuff.cpp
 )
 if(WIN32)
     list(APPEND FASTCHAT_CORE_SOURCES
@@ -210,6 +212,7 @@ if(WIN32)
         src/core/platform/process_windows.cpp
         src/core/platform/speech_sapi.cpp
         src/core/platform/child_windows.cpp
+        src/core/platform/pty_windows.cpp
         src/core/platform/desktop_windows.cpp
     )
 else()
@@ -219,6 +222,7 @@ else()
         src/core/platform/secrets_posix.cpp
         src/core/platform/process_posix.cpp
         src/core/platform/child_posix.cpp
+        src/core/platform/pty_posix.cpp
     )
 endif()
 if(APPLE)
@@ -262,6 +266,13 @@ else()
     find_package(CURL REQUIRED)
     find_package(Threads REQUIRED)
     target_link_libraries(fastchat_core PUBLIC CURL::libcurl Threads::Threads ${CMAKE_DL_LIBS})
+    if(NOT APPLE)
+        # forkpty, for Freebuff's pseudo-terminal (in libc on BSD and musl).
+        find_library(FASTCHAT_UTIL_LIBRARY util)
+        if(FASTCHAT_UTIL_LIBRARY)
+            target_link_libraries(fastchat_core PUBLIC ${FASTCHAT_UTIL_LIBRARY})
+        endif()
+    endif()
 endif()
 if(APPLE)
     target_link_libraries(fastchat_core PUBLIC "-framework Security" "-framework CoreFoundation"
@@ -294,6 +305,7 @@ endif()
 
 add_executable(FastChat WIN32 MACOSX_BUNDLE ${FASTCHAT_SOURCES})
 target_link_libraries(FastChat PRIVATE fastchat_core wx::core wx::base wx::adv)
+
 if(FASTCHAT_YYTHUNKS_OBJ)
     # An object on the command line comes before every library, so its
     # stand-ins win over the system's import libraries.

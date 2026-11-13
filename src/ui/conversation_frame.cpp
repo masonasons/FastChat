@@ -763,8 +763,8 @@ void ConversationFrame::Compact() {
         Send();
         return;
     }
-    if (kind && kind->style == ApiStyle::Codex) {
-        ShowError(this, "Codex compacts its context on its own; FastChat cannot ask it to.");
+    if (kind && (kind->style == ApiStyle::Codex || kind->style == ApiStyle::Freebuff)) {
+        ShowError(this, U(std::string(kind->displayName) + " compacts its context on its own; FastChat cannot ask it to."));
         return;
     }
     if (ContextMessages(m_messages).size() < 3) {
@@ -789,7 +789,8 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
     turn.request.systemPrompt = SystemPrompt();
     bool agent = false;
     if (const ProviderKindInfo* kind = FindProviderKind(provider.kind);
-        kind && (kind->style == ApiStyle::ClaudeCode || kind->style == ApiStyle::Codex)) {
+        kind && (kind->style == ApiStyle::ClaudeCode || kind->style == ApiStyle::Codex ||
+                 kind->style == ApiStyle::Freebuff)) {
         // Coding agents have their own instructions; add only the user's.
         agent = true;
         const GeneralSettings& gs = AppSettings().general;
@@ -807,7 +808,8 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
     turn.agentMode = provider.kind == "claude_code" ? m_conv.settings.agentMode : std::string();
     if (m_conv.type == ConversationType::Computer) {
         const ProviderKindInfo* kind = FindProviderKind(provider.kind);
-        if (kind && (kind->style == ApiStyle::ClaudeCode || kind->style == ApiStyle::Codex)) {
+        if (kind && (kind->style == ApiStyle::ClaudeCode || kind->style == ApiStyle::Codex ||
+                     kind->style == ApiStyle::Freebuff)) {
             ShowError(this, "Computer use needs a model from an API provider (Anthropic, OpenAI, Gemini, OpenRouter...), "
                             "not a coding agent. Choose another model with Ctrl+M.");
             return false;
