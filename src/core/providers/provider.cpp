@@ -119,6 +119,9 @@ const std::vector<ProviderKindInfo>& ProviderKinds() {
         {"codex", "Codex CLI", ApiStyle::Codex, "", false, false, "", "https://github.com/openai/codex", "",
          "OpenAI's coding agent, run on this computer with your ChatGPT login or an API key. In code conversations it "
          "may edit files in the folder but has no network access."},
+        {"freebuff", "Freebuff CLI", ApiStyle::Freebuff, "", false, false, "", "https://freebuff.com/cli", "",
+         "Freebuff's coding agent, run on this computer with your Freebuff login in its own terminal interface, in "
+         "the background, the way BlindPilot drives it. In code conversations it may edit files in the folder." },
         {"openai_compatible", "Other OpenAI-compatible service", ApiStyle::OpenAI, "http://localhost:1234/v1", false,
          false, "", "", "", "Any service with an OpenAI-style chat completions API: LM Studio, vLLM, llama.cpp, LiteLLM..."},
     };
@@ -139,6 +142,7 @@ std::vector<std::string> EffortLevelsFor(const std::string& providerKind, const 
     // Coding agents take any level and always think.
     if (style == ApiStyle::ClaudeCode) return {"low", "medium", "high", "xhigh", "max"};  // "none" would be low
     if (style == ApiStyle::Codex) return {"none", "low", "medium", "high", "xhigh"};       // max would be xhigh
+    if (style == ApiStyle::Freebuff) return {};  // its models pick their own thinking
     // A model the provider says does not think has nothing to set.
     if (info && !info->id.empty() && !info->reasoning) return {};
     switch (style) {
@@ -483,6 +487,7 @@ std::unique_ptr<Provider> CreateProvider(const ProviderConfig& config) {
         case ApiStyle::Ollama: return CreateOllamaProvider(config);
         case ApiStyle::ClaudeCode: return CreateClaudeCodeProvider(config);
         case ApiStyle::Codex: return CreateCodexProvider(config);
+        case ApiStyle::Freebuff: return CreateFreebuffProvider(config);
         case ApiStyle::OpenAI: break;
     }
     return CreateOpenAIProvider(config);

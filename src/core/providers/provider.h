@@ -28,6 +28,7 @@ enum class ApiStyle {
     // Coding agents run as programs; they bring their own tools.
     ClaudeCode,
     Codex,
+    Freebuff,
 };
 
 struct ProviderKindInfo {

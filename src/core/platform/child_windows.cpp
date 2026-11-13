@@ -267,14 +267,36 @@ std::string FindProgram(const std::string& name) {
         wchar_t found[MAX_PATH * 2];
         if (SearchPathW(nullptr, wname.c_str(), ext, MAX_PATH * 2, found, nullptr)) return WideToUtf8(found);
     }
-    // Where installers commonly put them, in case PATH has not caught up.
+    // Where package managers put programs, in case the PATH FastChat was started
+    // with has not caught up (or was set before they were installed).
     wchar_t profile[MAX_PATH] = L"";
-    GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
     wchar_t appdata[MAX_PATH] = L"";
+    wchar_t local[MAX_PATH] = L"";
+    wchar_t programFiles[MAX_PATH] = L"";
+    GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
     GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
-    for (const std::wstring& candidate : {std::wstring(profile) + L"\\.local\\bin\\" + wname + L".exe",
-                                          std::wstring(appdata) + L"\\npm\\" + wname + L".cmd"}) {
-        if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) return WideToUtf8(candidate);
+    GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+    GetEnvironmentVariableW(L"ProgramFiles", programFiles, MAX_PATH);
+    const std::vector<std::wstring> dirs = {
+        std::wstring(appdata) + L"\\npm",              // npm install -g
+        std::wstring(local) + L"\\Volta\\bin",         // Volta
+        std::wstring(local) + L"\\pnpm",               // pnpm
+        std::wstring(local) + L"\\Yarn\\bin",          // Yarn
+        std::wstring(profile) + L"\\.volta\\bin",
+        std::wstring(profile) + L"\\.bun\\bin",         // Bun
+        std::wstring(profile) + L"\\.local\\bin",
+        std::wstring(profile) + L"\\scoop\\shims",     // Scoop
+        std::wstring(programFiles) + L"\\nodejs",      // Node's own folder
+    };
+    for (const auto& dir : dirs) {
+        if (dir.size() <= 2) continue;  // only a drive (or empty)
+        for (const wchar_t* ext : {L".exe", L".cmd", L".bat", L""}) {
+            std::wstring candidate = dir + L"\\" + wname + ext;
+            DWORD attributes = GetFileAttributesW(candidate.c_str());
+            if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                return WideToUtf8(candidate);
+            }
+        }
     }
     return std::string();
 }

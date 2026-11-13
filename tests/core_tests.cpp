@@ -108,6 +108,7 @@ static void TestUtil() {
     using Levels = std::vector<std::string>;
     CHECK(EffortLevelsFor("claude_code", "opus", nullptr) == Levels({"low", "medium", "high", "xhigh", "max"}));
     CHECK(EffortLevelsFor("codex", "gpt-5.5", nullptr) == Levels({"none", "low", "medium", "high", "xhigh"}));
+    CHECK(EffortLevelsFor("freebuff", "deepseek-v4.1-flash-fast", nullptr).empty());
     ModelInfo plain;
     plain.id = "llama3";
     CHECK(EffortLevelsFor("ollama", "llama3", &plain).empty());  // does not think
@@ -549,7 +550,7 @@ static void TestQueueRetryCompaction(const std::string& base, const std::string&
               << " messages\n";
 }
 
-// A turn with a coding agent (fake Claude Code / Codex), driven to the end.
+// A turn with a coding agent (fake Claude Code / Codex / Freebuff), driven to the end.
 static TestListener RunAgentTurn(const ProviderConfig& provider, std::vector<Message> history, const std::string& prompt,
                                  bool tools, bool approve, const std::string& root) {
     std::mutex mutex;
@@ -586,14 +587,37 @@ static TestListener RunAgentTurn(const ProviderConfig& provider, std::vector<Mes
     return listener;
 }
 
+// Whether this machine can run a program in a pseudo-terminal at all. A
+// restricted session can create the terminal and the child and then lose the
+// child before it draws anything (0xC0000142), leaving nothing to read. The
+// FreeBuff turns need a terminal that works, so they are reported as not run.
+static bool PseudoTerminalWorks() {
+#ifdef _WIN32
+    std::vector<std::string> argv{"C:\\Windows\\System32\\cmd.exe", "/c", "echo pty-ok"};
+#else
+    std::vector<std::string> argv{"/bin/sh", "-c", "echo pty-ok"};
+#endif
+    PseudoTerminal pty;
+    std::string error;
+    if (!pty.Start(argv, "", {}, 80, 24, error)) return false;
+    for (int i = 0; i < 40; i++) {
+        std::string out;
+        if (pty.Read(out, 50) && out.find("pty-ok") != std::string::npos) return true;
+        if (pty.Ended()) break;
+    }
+    return false;
+}
+
 static void TestAgents(const std::string& root) {
     std::string testsDir = PathToUtf8(fs::path(__FILE__).parent_path());
 #ifdef _WIN32
     std::string claudeProgram = JoinPath(testsDir, "fake_claude.cmd");
     std::string codexProgram = JoinPath(testsDir, "fake_codex.cmd");
+    std::string freebuffProgram = JoinPath(testsDir, "fake_freebuff.cmd");
 #else
     std::string claudeProgram = JoinPath(testsDir, "fake_claude.py");
     std::string codexProgram = JoinPath(testsDir, "fake_codex.py");
+    std::string freebuffProgram = JoinPath(testsDir, "fake_freebuff.py");
 #endif
     ProviderConfig claude;
     claude.id = "cc";
@@ -700,6 +724,71 @@ static void TestAgents(const std::string& root) {
             leftOver = true;
         }
         CHECK(!leftOver);
+    }
+
+    // Freebuff's models come out of its own catalog, read from the program.
+    {
+        std::cout << "  freebuff: model catalog\n";
+        ProviderConfig catalog;
+        catalog.id = "fb-catalog";
+        catalog.kind = "freebuff";
+        catalog.name = "Freebuff";
+        catalog.baseUrl = freebuffProgram;
+        auto provider = CreateProvider(catalog);
+        std::vector<ModelInfo> models;
+        std::string listError;
+        CHECK(provider->ListModels(models, listError, nullptr));
+        CHECK_EQ(models.size(), size_t{2});
+        if (models.size() == 2) {
+            CHECK_EQ(models[0].id, std::string("fake/alpha"));
+            CHECK_EQ(models[1].id, std::string("fake/beta"));
+        }
+    }
+
+    // Freebuff has no headless mode: it runs in a pseudo-terminal, which a
+    // restricted or sandboxed session cannot host at all.
+    if (!PseudoTerminalWorks()) {
+        std::cout << "  freebuff: no working pseudo-terminal here; its turns were not run\n";
+    } else {
+        ProviderConfig freebuff;
+        freebuff.id = "fb";
+        freebuff.kind = "freebuff";
+        freebuff.name = "Freebuff";
+        freebuff.baseUrl = freebuffProgram;
+        std::cout << "  freebuff: command and file change\n";
+        TestListener fb = RunAgentTurn(freebuff, {}, "Please run the build", true, true, root);
+        if (!fb.error.empty()) std::cerr << "    error: " << fb.error << "\n";
+        CHECK(fb.outcome == ChatListener::Outcome::Done);
+        CHECK_EQ(fb.messages.size(), size_t{5});  // call, output, change call, change, answer
+        if (fb.messages.size() == 5) {
+            CHECK_EQ(fb.messages[0].toolCalls[0].name, std::string("run_command"));
+            CHECK(fb.messages[1].content.find("Exit code: 0") != std::string::npos);
+            CHECK(!fb.messages[1].toolError);
+            CHECK_EQ(fb.messages[3].reasoning, std::string("Changed main.cpp"));
+            CHECK_EQ(fb.messages[3].toolName, std::string("apply_patch"));
+            CHECK_EQ(fb.messages[4].content, std::string("All done."));
+            CHECK_EQ(fb.messages[4].providerData["freebuff"].value("session_id", ""), std::string("fb-1"));
+        }
+        std::cout << "  freebuff: chat and resume\n";
+        TestListener fbChat = RunAgentTurn(freebuff, fb.messages, "Thanks", false, true, root);
+        CHECK(fbChat.outcome == ChatListener::Outcome::Done);
+        CHECK(fbChat.text.find("Resumed fb-1") != std::string::npos);
+        CHECK_EQ(fbChat.messages.size(), size_t{1});
+
+        // Attachments are saved where Freebuff can read them, and named (a PDF
+        // is only named: Freebuff cannot read one).
+        std::cout << "  freebuff: attachments\n";
+        {
+            ChatTurn fbFiles;
+            fbFiles.provider = freebuff;
+            Message asked = UserMessage("What is this?");
+            AttachToMessage(asked, {{"chart.png", "image/png", "PNG"}, {"report.pdf", "application/pdf", "%PDF"}});
+            fbFiles.request.messages = {asked};
+            TestListener ff = Drive(fbFiles);
+            CHECK(ff.outcome == ChatListener::Outcome::Done);
+            CHECK(ff.text.find("Images: image1.png 3 bytes.") != std::string::npos);
+            CHECK(ff.text.find("A PDF was named.") != std::string::npos);
+        }
     }
 
     std::cout << "  claude code: message sent while it works\n";
@@ -1718,8 +1807,12 @@ int main() {
     // Keep the model cache and anything else out of the real data folder.
 #ifdef _WIN32
     _putenv_s("FASTCHAT_DATA_DIR", dir.c_str());
+    // Freebuff keeps its chats in its own config folder; point that at the test
+    // folder too, so the fake terminal's chats never touch the real ones.
+    _putenv_s("FREEBUFF_CONFIG_DIR", JoinPath(dir, "freebuff").c_str());
 #else
     setenv("FASTCHAT_DATA_DIR", dir.c_str(), 1);
+    setenv("FREEBUFF_CONFIG_DIR", JoinPath(dir, "freebuff").c_str(), 1);
 #endif
 
     std::cout << "Prism backends:";
@@ -1823,7 +1916,7 @@ int main() {
     ctx.Set("model", "GLM");
     CHECK_EQ(ExpandTemplate("{model} is responding", ctx), std::string("GLM is responding"));
 
-    std::cout << "Coding agents (fake Claude Code and Codex):\n";
+    std::cout << "Coding agents (fake Claude Code, Codex and Freebuff):\n";
     TestAgents(JoinPath(dir, "project"));
 
 #ifdef _WIN32

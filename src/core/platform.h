@@ -131,6 +131,35 @@ private:
     Impl* m_impl;
 };
 
+// A program run in a pseudo-terminal, off screen: an interface that is a
+// full-screen terminal UI cannot be driven through pipes (Freebuff's is one).
+// The terminal is never shown.
+class PseudoTerminal {
+public:
+    PseudoTerminal();
+    ~PseudoTerminal();
+    PseudoTerminal(const PseudoTerminal&) = delete;
+    PseudoTerminal& operator=(const PseudoTerminal&) = delete;
+
+    // argv[0] is the program's full path; `env` adds to (or replaces in) this
+    // process's environment. The terminal has `cols` columns and `rows` lines.
+    bool Start(const std::vector<std::string>& argv, const std::string& workingDir,
+               const std::vector<std::pair<std::string, std::string>>& env, int cols, int rows,
+               std::string& error);
+    bool Write(const std::string& data);
+    // Whatever it has written since the last read, waiting up to `timeoutMs`.
+    bool Read(std::string& out, unsigned timeoutMs);
+    // True once the terminal can produce no further output.
+    bool Ended() const;
+    void Kill();
+    int Pid() const;
+
+    struct Impl;
+
+private:
+    Impl* m_impl;
+};
+
 // The full path of a program on the PATH (with .exe, .cmd or .bat on Windows),
 // or empty.
 std::string FindProgram(const std::string& name);

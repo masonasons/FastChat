@@ -171,7 +171,7 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
         const Message& m = messages[i];
         if (m.role == Role::User || IsAgentCompactionNote(m)) continue;
         if (m.role == Role::Assistant && m.providerId == turn.provider.id) {
-            for (const char* kind : {"claude_code", "codex"}) {
+            for (const char* kind : {"claude_code", "codex", "freebuff"}) {
                 if (auto pd = m.providerData.find(kind); pd != m.providerData.end() && pd->is_object()) {
                     for (const char* key : {"session_id", "thread_id"}) {
                         if (auto id = pd->find(key); id != pd->end() && id->is_string()) agent.resumeSession = id->get<std::string>();
@@ -213,7 +213,7 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
     };
 
     // Messages sent meanwhile: Claude Code takes them while it works; any left
-    // over (and all of Codex's) go in a follow-up turn of the same session.
+    // over (and all of Codex's and Freebuff's) go in a follow-up turn of the same session.
     callbacks.takeQueued = [this]() { return TakeQueued(); };
     callbacks.onQueuedDelivered = [this](Message& m) {
         m.createdAt = NowSeconds();
@@ -243,7 +243,7 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
             callbacks.onQueuedDelivered(m);
             agent.request.messages.push_back(m);
         }
-        for (const char* kind : {"claude_code", "codex"}) {
+        for (const char* kind : {"claude_code", "codex", "freebuff"}) {
             if (auto pd = result.providerData.find(kind); pd != result.providerData.end() && pd->is_object()) {
                 for (const char* key : {"session_id", "thread_id"}) {
                     if (auto id = pd->find(key); id != pd->end() && id->is_string() && !id->get<std::string>().empty()) {

@@ -164,7 +164,10 @@ std::string FindProgram(const std::string& name) {
     const char* path = std::getenv("PATH");
     std::string dirs = path ? path : "";
     std::string home = GetHomeDir();
-    dirs += ":" + home + "/.local/bin:/usr/local/bin:/opt/homebrew/bin";
+    // Where package managers put programs, in case the PATH FastChat was opened
+    // with has not caught up (or was set before they were installed).
+    dirs += ":" + home + "/.local/bin:" + home + "/.volta/bin:" + home + "/.bun/bin:" +
+            home + "/.npm-global/bin:" + home + "/Library/pnpm:/usr/local/bin:/opt/homebrew/bin";
     size_t start = 0;
     while (start <= dirs.size()) {
         size_t colon = dirs.find(':', start);
