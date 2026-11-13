@@ -4,6 +4,7 @@
 // its rate_limit_event reports the plan's usage.
 
 #include "core/providers/provider_impl.h"
+#include "core/platform.h"
 #include "core/util.h"
 
 #include <chrono>
@@ -239,7 +240,10 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
         // Claude Code settings start in (auto mode would approve on its own).
         // Their allow rules, CLAUDE.md and MCP servers still apply.
         argv.push_back("--permission-mode");
-        argv.push_back(turn.approval == "auto" ? "acceptEdits" : "default");
+        argv.push_back(!turn.permissionMode.empty() ? turn.permissionMode : turn.approval == "auto" ? "acceptEdits" : "default");
+        // Lets the user switch to bypassing permissions while it works (it is
+        // only an option; it bypasses nothing by itself).
+        argv.push_back("--allow-dangerously-skip-permissions");
     }
     if (!turn.resumeSession.empty()) {
         argv.push_back("--resume");
@@ -333,12 +337,39 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
     double totalCost = 0;
     bool anyCost = false;
 
+    // The permission mode it works in now: as launched, then as the user or
+    // Claude Code changes it.
+    std::string mode = !turn.permissionMode.empty() ? turn.permissionMode : turn.approval == "auto" ? "acceptEdits" : "default";
+    // Whether the user chose a mode (then Claude Code's mode decides what is asked,
+    // and FastChat asks it), or it follows FastChat's approval setting.
+    bool chosenMode = !turn.permissionMode.empty();
+    auto modeChanged = [&](const std::string& now) {
+        if (now.empty() || now == mode) return;
+        mode = now;
+        if (callbacks.onModeChanged) callbacks.onModeChanged(now);
+    };
+    int controlCount = 0;
+    std::map<std::string, std::string> modeRequests;  // request id -> the mode before it
+
     std::string line;
     for (;;) {
         if (cancel && cancel->load()) {
             child.Kill();
             result.cancelled = true;
             break;
+        }
+        if (stdinOpen && turn.tools && callbacks.takeModeChange) {
+            std::string wanted = callbacks.takeModeChange();
+            if (!wanted.empty() && wanted != mode) {
+                std::string id = "fastchat-mode-" + std::to_string(++controlCount);
+                json r = {{"type", "control_request"},
+                          {"request_id", id},
+                          {"request", {{"subtype", "set_permission_mode"}, {"mode", wanted}}}};
+                child.Write(JsonDump(r) + "\n");
+                modeRequests[id] = mode;
+                mode = wanted;  // unless Claude Code refuses
+                chosenMode = true;
+            }
         }
         if (stdinOpen && callbacks.takeQueued) {
             for (auto& m : callbacks.takeQueued()) {
@@ -424,8 +455,24 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 }
             }
             activity(e);
+        } else if (type == "control_response") {
+            // The answer to a mode change: refused, the mode stays what it was.
+            const json& response = ev.value("response", json::object());
+            auto asked = modeRequests.find(Str(response, "request_id"));
+            if (asked != modeRequests.end()) {
+                if (Str(response, "subtype") == "error") {
+                    std::string why = Str(response, "error");
+                    AppendLog("Claude Code did not change its permission mode: " + why);
+                    if (callbacks.onStatus) callbacks.onStatus("Claude Code did not change mode: " + why);
+                    std::string before = asked->second;
+                    mode.clear();
+                    modeChanged(before);
+                }
+                modeRequests.erase(asked);
+            }
         } else if (type == "system" && Str(ev, "subtype") == "status") {
             if (Str(ev, "status") == "compacting" && callbacks.onStatus) callbacks.onStatus("Compacting the conversation");
+            modeChanged(Str(ev, "permissionMode"));
         } else if (type == "system" && Str(ev, "subtype") == "compact_boundary") {
             // Claude Code compacted its context (asked with /compact, or by itself).
             const json& meta = ev.value("compact_metadata", json::object());
@@ -550,6 +597,30 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 } else {
                     respond(requestId, {{"behavior", "deny"}, {"message", "The user chose not to answer these questions. Ask them how to proceed."}});
                 }
+            } else if (Str(request, "subtype") == "can_use_tool" && Str(request, "tool_name") == "ExitPlanMode") {
+                // A plan to approve, whatever the approval setting: it is a
+                // decision, not a permission. Approved, it is worked on in the
+                // mode the user chose.
+                json input = request.value("input", json::object());
+                PlanDecision decision;
+                if (callbacks.approvePlan) {
+                    decision = callbacks.approvePlan(Str(input, "plan"));
+                } else if (callbacks.approve) {
+                    decision.start = callbacks.approve("Start on this plan:\n\n" + Str(input, "plan"), false);
+                    decision.mode = "default";
+                }
+                if (decision.start) {
+                    std::string next = decision.mode.empty() ? std::string("default") : decision.mode;
+                    respond(requestId, {{"behavior", "allow"},
+                                        {"updatedInput", input},
+                                        {"updatedPermissions", json::array({{{"type", "setMode"}, {"mode", next}, {"destination", "session"}}})}});
+                    modeChanged(next);
+                    chosenMode = true;
+                } else {
+                    std::string message = "The user wants to keep planning.";
+                    if (!Trim(decision.feedback).empty()) message += " What they said: " + decision.feedback;
+                    respond(requestId, {{"behavior", "deny"}, {"message", message}});
+                }
             } else if (Str(request, "subtype") == "can_use_tool") {
                 std::string tool = Str(request, "tool_name");
                 json input = request.value("input", json::object());
@@ -562,8 +633,9 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                     std::string agent = name != agentName.end() ? name->second : std::string("a subagent");
                     what = "Agent '" + agent + "' wants to: " + Describe(tool, input, folder);
                 }
-                if (turn.approval == "auto") allow = true;
-                else if (turn.approval != "deny" && callbacks.approve) {
+                // A mode the user chose decides what reaches FastChat, and that is asked.
+                if (!chosenMode && turn.approval == "auto") allow = true;
+                else if ((chosenMode || turn.approval != "deny") && callbacks.approve) {
                     allow = callbacks.approve(what, IsCommandTool(tool) && owner == subCallOwner.end());
                 }
                 if (allow) respond(requestId, {{"behavior", "allow"}, {"updatedInput", input}});

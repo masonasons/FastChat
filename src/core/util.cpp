@@ -454,6 +454,22 @@ std::string PathToUtf8(const std::filesystem::path& p) {
     return std::string(u.begin(), u.end());
 }
 
+std::string ResolveFolder(const std::string& typed, const std::string& base, const std::string& home) {
+    std::string t = Trim(typed);
+    if (t.size() >= 2 && t.front() == '"' && t.back() == '"') t = t.substr(1, t.size() - 2);  // a pasted "C:\My dev"
+    if (t.empty()) return Trim(base);
+    std::filesystem::path p = PathFromUtf8(t);
+    if ((t == "~" || StartsWith(t, "~/") || StartsWith(t, "~\\")) && !home.empty()) {
+        p = PathFromUtf8(home) / PathFromUtf8(t.size() > 2 ? t.substr(2) : std::string());
+    } else if (p.is_relative() && !p.has_root_name() && !p.has_root_directory() && !Trim(base).empty()) {
+        p = PathFromUtf8(Trim(base)) / p;
+    }
+    p = p.lexically_normal();
+    // No trailing separator, except for a drive's or the system's root.
+    if (!p.has_filename() && p != p.root_path()) p = p.parent_path();
+    return PathToUtf8(p);
+}
+
 // Length of the well-formed UTF-8 sequence at s[i], or 0 if it is not one.
 static size_t Utf8SequenceLength(const std::string& s, size_t i) {
     auto byte = [&](size_t k) { return k < s.size() ? static_cast<unsigned char>(s[k]) : 0u; };

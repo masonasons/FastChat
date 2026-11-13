@@ -32,6 +32,7 @@ struct GeneralSettings {
     std::string defaultModel;         // empty: the provider's own default
     std::string chatSystemPrompt;
     std::string codeSystemPrompt;     // added to the built-in coding instructions
+    std::string codeFolder;           // where new code conversations start (a folder of projects); empty: none
     bool autoTitle = true;            // name untitled conversations from their first exchange
     std::string titleProviderId;      // empty: the conversation's own
     std::string titleModel;

@@ -5,6 +5,7 @@
 #include "ui/ui_util.h"
 #include "core/platform.h"
 #include "core/providers/provider.h"
+#include "core/util.h"
 
 #include <wx/dirdlg.h>
 #include <wx/filename.h>
@@ -27,7 +28,11 @@ public:
 
         auto* folderRow = new wxBoxSizer(wxHORIZONTAL);
         m_folderLabel = new wxStaticText(this, wxID_ANY, "&Folder:");
-        m_folder = new wxTextCtrl(this, wxID_ANY);
+        // Code conversations start in the base folder from the settings, where a
+        // project's name is enough.
+        const std::string& base = AppSettings().general.codeFolder;
+        m_folder = new wxTextCtrl(this, wxID_ANY, U(base));
+        if (!base.empty()) m_folder->SetHint("A project's name in " + U(base) + ", or any folder");
         m_browse = new wxButton(this, wxID_ANY, "&Browse...");
         folderRow->Add(m_folderLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
         folderRow->Add(m_folder, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
@@ -67,7 +72,7 @@ public:
         c.title = S(m_name->GetValue());
         int sel = m_type->GetSelection();
         c.type = sel == 1 ? ConversationType::Code : sel == 2 ? ConversationType::Computer : ConversationType::Chat;
-        c.folder = c.type == ConversationType::Code ? S(m_folder->GetValue()) : std::string();
+        c.folder = c.type == ConversationType::Code ? Folder() : std::string();
         c.providerId = m_providerId;
         c.model = m_model;
         return c;
@@ -100,19 +105,45 @@ private:
         return model.empty() ? std::string("the provider's default") : model;
     }
 
+    // The folder typed, with a name or relative path inside the base folder.
+    std::string Folder() const {
+        return ResolveFolder(S(m_folder->GetValue()), AppSettings().general.codeFolder, GetHomeDir());
+    }
+
     void Browse() {
-        wxDirDialog dlg(this, "Choose the project folder", m_folder->GetValue().empty() ? U(GetHomeDir()) : m_folder->GetValue(),
-                        wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+        // From the folder typed if it is there, else the base folder, else home.
+        std::string start = Folder();
+        if (start.empty() || !wxFileName::DirExists(U(start))) start = AppSettings().general.codeFolder;
+        if (start.empty() || !wxFileName::DirExists(U(start))) start = GetHomeDir();
+        wxDirDialog dlg(this, "Choose the project folder", U(start), wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
         if (dlg.ShowModal() == wxID_OK) m_folder->SetValue(dlg.GetPath());
     }
 
     void OnOk(wxCommandEvent& e) {
         if (m_type->GetSelection() == 1) {
-            wxString folder = m_folder->GetValue();
-            if (folder.empty() || !wxFileName::DirExists(folder)) {
-                ShowError(this, "Choose an existing folder for a code conversation.");
+            std::string folder = Folder();
+            if (folder.empty()) {
+                ShowError(this, "Choose a folder for a code conversation.");
                 m_folder->SetFocus();
                 return;
+            }
+            wxFileName name = wxFileName::DirName(U(folder));
+            if (!name.IsAbsolute()) {
+                ShowError(this, "Type the folder's full path, or set a base folder for code conversations in Settings.");
+                m_folder->SetFocus();
+                return;
+            }
+            if (!wxFileName::DirExists(U(folder))) {
+                // A new project: make its folder.
+                if (!AskYesNo(this, U(folder) + " does not exist. Create it?", "New folder")) {
+                    m_folder->SetFocus();
+                    return;
+                }
+                if (!wxFileName::Mkdir(U(folder), wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL)) {
+                    ShowError(this, "Could not create " + U(folder) + ".");
+                    m_folder->SetFocus();
+                    return;
+                }
             }
         }
         e.Skip();

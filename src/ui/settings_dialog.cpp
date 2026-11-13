@@ -11,7 +11,9 @@
 #include "core/updater.h"
 #include "core/util.h"
 
+#include <wx/dirdlg.h>
 #include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/notebook.h>
 #include <wx/spinctrl.h>
 #include <wx/utils.h>
@@ -77,6 +79,22 @@ private:
         s->Add(new wxStaticText(panel, wxID_ANY, "Extra instructions for c&ode conversations:"), 0, wxLEFT | wxRIGHT | wxTOP, 6);
         m_codePrompt = new wxTextCtrl(panel, wxID_ANY, U(g.codeSystemPrompt), wxDefaultPosition, wxSize(-1, 80), wxTE_MULTILINE);
         s->Add(m_codePrompt, 0, wxEXPAND | wxALL, 6);
+
+        auto* folderRow = new wxBoxSizer(wxHORIZONTAL);
+        auto* folderLabel = new wxStaticText(panel, wxID_ANY, "Base &folder for code conversations (new ones start there):");
+        m_codeFolder = new wxTextCtrl(panel, wxID_ANY, U(g.codeFolder));
+        LinkLabel(folderLabel, m_codeFolder);
+        auto* folderBrowse = new wxButton(panel, wxID_ANY, "Bro&wse...");
+        folderRow->Add(folderLabel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        folderRow->Add(m_codeFolder, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+        folderRow->Add(folderBrowse, 0, wxALIGN_CENTER_VERTICAL);
+        s->Add(folderRow, 0, wxEXPAND | wxALL, 6);
+        folderBrowse->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            wxString start = m_codeFolder->GetValue();
+            if (start.empty() || !wxFileName::DirExists(start)) start = U(GetHomeDir());
+            wxDirDialog dlg(this, "Choose the base folder for code conversations", start, wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+            if (dlg.ShowModal() == wxID_OK) m_codeFolder->SetValue(dlg.GetPath());
+        });
 
         m_approval = new wxChoice(panel, wxID_ANY);
         m_approval->Append("Ask each time");
@@ -300,6 +318,7 @@ private:
         s->Add(brow, 0, wxALL, 6);
 
         m_voice = new wxChoice(panel, wxID_ANY);
+        m_voices = std::make_unique<VoiceChoice>(m_voice, "Default");
         s->Add(LabeledRow(panel, "&Voice:", m_voice, 0), 0, wxALL, 6);
 
         m_rate = new wxSlider(panel, wxID_ANY, sp.rate, 0, 100);
@@ -367,15 +386,10 @@ private:
         m_backend->Enable(prism);
         if (!reloadVoices) return;
         std::string backend = m_backendKeys[std::max(0, m_backend->GetSelection())];
-        std::string want = m_voice->GetSelection() > 0 ? S(m_voice->GetStringSelection()) : m_work.speech.voice;
-        m_voice->Clear();
-        m_voice->Append("Default");
-        m_voice->SetSelection(0);
-        for (const auto& v : Speech::ListVoices(EngineKey(), backend)) {
-            m_voice->Append(U(v));
-            if (v == want) m_voice->SetSelection(m_voice->GetCount() - 1);
-        }
-        m_voice->Enable(m_voice->GetCount() > 1);
+        std::string want = m_voicesListed ? m_voices->Selected() : m_work.speech.voice;
+        if (want.empty()) want = m_work.speech.voice;
+        m_voicesListed = true;
+        m_voices->Load(EngineKey(), backend, want);
     }
 
     void StoreSpeech() {
@@ -383,7 +397,7 @@ private:
         sp.enabled = m_speechOn->GetValue();
         sp.engine = EngineKey();
         sp.prismBackend = m_backendKeys[std::max(0, m_backend->GetSelection())];
-        sp.voice = m_voice->GetSelection() > 0 ? S(m_voice->GetStringSelection()) : std::string();
+        sp.voice = m_voices->Selected();
         sp.rate = m_rate->GetValue();
         sp.volume = m_volume->GetValue();
         sp.speakResponses = m_speakResponses->GetSelection();
@@ -542,6 +556,13 @@ private:
         g.maxTokens = m_maxTokens->GetValue();
         g.chatSystemPrompt = S(m_chatPrompt->GetValue());
         g.codeSystemPrompt = S(m_codePrompt->GetValue());
+        g.codeFolder = Trim(S(m_codeFolder->GetValue()));
+        if (!g.codeFolder.empty() && !wxFileName::DirExists(U(g.codeFolder))) {
+            ShowError(this, "The base folder for code conversations does not exist: " + U(g.codeFolder));
+            m_book->SetSelection(0);
+            m_codeFolder->SetFocus();
+            return;
+        }
         g.commandApproval = m_approval->GetSelection() == 1 ? "auto" : m_approval->GetSelection() == 2 ? "deny" : "ask";
         g.computerApproval = m_computerApproval->GetSelection() == 1 ? "auto" : m_computerApproval->GetSelection() == 2 ? "deny" : "ask";
         g.maxToolSteps = m_maxSteps->GetValue();
@@ -578,6 +599,7 @@ private:
     wxSpinCtrl* m_maxTokens;
     wxTextCtrl* m_chatPrompt;
     wxTextCtrl* m_codePrompt;
+    wxTextCtrl* m_codeFolder;
     wxChoice* m_approval;
     wxChoice* m_computerApproval;
     wxSpinCtrl* m_maxSteps;
@@ -595,6 +617,8 @@ private:
     wxChoice* m_backend;
     std::vector<std::string> m_backendKeys;
     wxChoice* m_voice;
+    std::unique_ptr<VoiceChoice> m_voices;
+    bool m_voicesListed = false;
     wxSlider* m_rate;
     wxSlider* m_volume;
     wxChoice* m_speakResponses;

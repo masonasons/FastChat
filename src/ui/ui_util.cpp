@@ -1,5 +1,6 @@
 #include "ui/ui_util.h"
 #include "core/providers/provider.h"
+#include "core/speech.h"
 
 #include <wx/clipbrd.h>
 #ifdef __WXOSX__
@@ -84,6 +85,58 @@ const std::vector<std::pair<std::string, wxString>>& EffortChoices() {
         {"high", "High"},      {"xhigh", "Extra high"},           {"max", "Maximum"},
     };
     return choices;
+}
+
+wxString EffortName(const std::string& key) {
+    for (const auto& [k, label] : EffortChoices()) {
+        if (k == key) return label;
+    }
+    return U(key);
+}
+
+void VoiceChoice::Load(const std::string& engine, const std::string& prismBackend, const std::string& want) {
+    m_want = want;
+    int generation = ++m_generation;
+    std::vector<std::string> voices;
+    if (Speech::CachedVoices(engine, prismBackend, voices)) {
+        Fill(voices);
+        return;
+    }
+    m_loaded = false;
+    m_choice->Clear();
+    m_choice->Append("Loading voices...");
+    m_choice->SetSelection(0);
+    m_choice->Disable();
+    std::shared_ptr<bool> alive = m_alive;
+    Speech::LoadVoices(engine, prismBackend, [this, alive, generation](const std::vector<std::string>& list) {
+        PostToUi([this, alive, generation, list]() {
+            if (*alive && generation == m_generation) Fill(list);
+        });
+    });
+}
+
+void VoiceChoice::Fill(const std::vector<std::string>& voices) {
+    wxArrayString items;
+    items.reserve(voices.size() + 1);
+    items.Add(m_first);
+    int select = 0;
+    for (const auto& v : voices) {
+        if (v == m_want) select = static_cast<int>(items.size());
+        items.Add(U(v));
+    }
+    // All at once: item by item, hundreds of voices take long to add.
+    m_choice->Freeze();
+    m_choice->Clear();
+    m_choice->Append(items);
+    m_choice->SetSelection(select);
+    m_choice->Thaw();
+    m_choice->Enable(items.size() > 1);
+    m_loaded = true;
+}
+
+std::string VoiceChoice::Selected() const {
+    if (!m_loaded) return m_want;
+    return m_choice->GetSelection() > 0 ? S(m_choice->GetStringSelection()) : std::string();
 }
 
 std::string ModelDisplayName(const std::string& providerId, const std::string& modelId) {

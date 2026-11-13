@@ -40,6 +40,15 @@ public:
         (void)questions;
         answer(false, {});
     }
+    // A coding agent's plan to approve (Claude Code's plan mode); call `answer`
+    // (on the UI thread) once.
+    virtual void OnApprovePlan(const std::string& plan, std::function<void(PlanDecision)> answer) {
+        (void)plan;
+        answer(PlanDecision());
+    }
+    // The coding agent's permission mode changed while it worked (a plan was
+    // approved, it entered plan mode, a change was refused).
+    virtual void OnAgentModeChanged(const std::string& mode) { (void)mode; }
     enum class Outcome { Done, Stopped, Failed };
     virtual void OnFinished(Outcome outcome, const std::string& error) = 0;
     // What it is doing now ("Trying again in 2 seconds...").
@@ -60,6 +69,7 @@ struct ChatTurn {
     bool computer = false;        // computer use conversation
     bool vision = true;           // the model can see images (computer use sends screenshots)
     ToolContext toolContext;      // also the approval setting for computer use
+    std::string agentMode;        // Claude Code's permission mode; empty: from the approval setting
     int maxSteps = 50;
     // Compaction: summarize the history first (compactFirst), or only that
     // (compactOnly). The summary covers messages up to compactThrough (an id).
@@ -84,6 +94,10 @@ public:
     std::vector<Message> TakeQueued();
     bool CancelQueued(size_t index);  // false if it already went
 
+    // A permission mode the user chose while a coding agent works: it switches
+    // at once (Claude Code), not only from the next message.
+    void SetAgentMode(const std::string& mode);
+
 private:
     void Run(ChatTurn turn);
     void RunTurn(ChatTurn turn);
@@ -91,6 +105,8 @@ private:
     void Post(std::function<void(ChatListener&)> fn);
     bool AskApproval(const std::string& what, bool isCommand);
     bool AskQuestions(const std::vector<AgentQuestion>& questions, std::vector<std::string>& answers);
+    PlanDecision AskPlan(const std::string& plan);
+    std::string TakeModeChange();
 
     std::function<void(std::function<void()>)> m_post;
     ChatListener* m_listener = nullptr;
@@ -99,6 +115,7 @@ private:
     std::atomic<bool> m_running{false};
     std::mutex m_queueMutex;
     std::deque<Message> m_queue;
+    std::string m_modeChange;  // under m_queueMutex
 };
 
 // Summarize `messages` into a compaction note covering up to `through`.

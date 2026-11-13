@@ -106,6 +106,9 @@ struct ConversationSettings {
     std::optional<int> maxTokens;
     std::string reasoningEffort;           // empty: default; "none", "low", "medium", "high", "xhigh", "max"
     std::string commandApproval;           // empty: global; "ask", "auto", "deny"
+    // Claude Code's permission mode: "default" (ask), "acceptEdits", "plan",
+    // "auto", "bypassPermissions", "dontAsk"; empty: from commandApproval.
+    std::string agentMode;
     std::optional<bool> soundsEnabled;
     std::optional<std::string> soundPack;  // "" = no pack (built-in tones)
     SpeechOverrides speech;

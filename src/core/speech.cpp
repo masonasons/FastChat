@@ -1,6 +1,14 @@
 #include "core/speech.h"
 #include "core/util.h"
 
+#include <map>
+#include <mutex>
+#include <thread>
+
+#ifdef _WIN32
+#include <objbase.h>
+#endif
+
 #ifdef FASTCHAT_HAVE_PRISM
 #include <prism.h>
 #endif
@@ -257,4 +265,84 @@ std::vector<std::string> Speech::ListVoices(const std::string& engine, const std
     std::unique_ptr<SpeechBackend> b = engine == "system" ? CreateSystemVoiceBackend() : CreatePrismBackend(prismBackend);
     if (!b) return {};
     return b->Voices();
+}
+
+namespace {
+
+using VoicesDone = std::function<void(const std::vector<std::string>&)>;
+
+struct VoiceList {
+    bool ready = false;
+    std::vector<std::string> voices;
+    std::vector<VoicesDone> waiting;  // while it is being listed
+};
+
+struct VoiceLists {
+    std::mutex mutex;
+    std::map<std::string, VoiceList> byEngine;  // "system", "prism:<backend>"
+    std::vector<std::thread> workers;
+    ~VoiceLists() {
+        for (auto& t : workers) {
+            if (t.joinable()) t.join();
+        }
+    }
+};
+
+VoiceLists& Lists() {
+    static VoiceLists lists;
+    return lists;
+}
+
+std::string VoiceKey(const std::string& engine, const std::string& prismBackend) {
+    return engine == "system" ? engine : "prism:" + prismBackend;
+}
+
+}  // namespace
+
+bool Speech::CachedVoices(const std::string& engine, const std::string& prismBackend, std::vector<std::string>& out) {
+    VoiceLists& lists = Lists();
+    std::lock_guard<std::mutex> lock(lists.mutex);
+    auto it = lists.byEngine.find(VoiceKey(engine, prismBackend));
+    if (it == lists.byEngine.end() || !it->second.ready) return false;
+    out = it->second.voices;
+    return true;
+}
+
+void Speech::LoadVoices(const std::string& engine, const std::string& prismBackend, VoicesDone done) {
+    VoiceLists& lists = Lists();
+    std::string key = VoiceKey(engine, prismBackend);
+    std::vector<std::string> ready;
+    {
+        std::lock_guard<std::mutex> lock(lists.mutex);
+        VoiceList& list = lists.byEngine[key];
+        if (!list.ready) {
+            bool started = !list.waiting.empty();
+            if (done) list.waiting.push_back(std::move(done));
+            else if (!started) list.waiting.push_back([](const std::vector<std::string>&) {});
+            if (started) return;
+            lists.workers.emplace_back([engine, prismBackend, key]() {
+#ifdef _WIN32
+                // SAPI and Prism's engines are COM.
+                HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
+                std::vector<std::string> voices = Speech::ListVoices(engine, prismBackend);
+#ifdef _WIN32
+                if (SUCCEEDED(com)) CoUninitialize();
+#endif
+                std::vector<VoicesDone> callbacks;
+                {
+                    VoiceLists& l = Lists();
+                    std::lock_guard<std::mutex> lock(l.mutex);
+                    VoiceList& list = l.byEngine[key];
+                    list.ready = true;
+                    list.voices = voices;
+                    callbacks.swap(list.waiting);
+                }
+                for (auto& cb : callbacks) cb(voices);
+            });
+            return;
+        }
+        ready = list.voices;
+    }
+    if (done) done(ready);
 }

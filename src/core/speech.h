@@ -2,10 +2,12 @@
 
 // Speech output: through Prism (whatever screen reader is running, or a speech
 // engine it supports) or directly through the system's own voices: SAPI 5 on
-// Windows, AVSpeech on the Mac. UI thread only.
+// Windows, AVSpeech on the Mac. UI thread only (except LoadVoices and
+// CachedVoices).
 
 #include "core/settings.h"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -45,8 +47,16 @@ public:
     // "SAPI 5 voices", "macOS voices (AVSpeech)".
     static std::string SystemVoicesName();
     static std::vector<std::string> PrismBackendNames();
-    // Voices of an engine ("prism" with a backend name, or "system").
+    // Voices of an engine ("prism" with a backend name, or "system"). Blocks
+    // while it asks the engine, which can take a while with many voices.
     static std::vector<std::string> ListVoices(const std::string& engine, const std::string& prismBackend);
+    // The same, without waiting: listed once on a worker thread, then kept.
+    // `done` gets them on that thread, or at once (on the caller's) when they
+    // were already listed. Any thread.
+    static void LoadVoices(const std::string& engine, const std::string& prismBackend,
+                           std::function<void(const std::vector<std::string>&)> done);
+    // The voices, if they have been listed already.
+    static bool CachedVoices(const std::string& engine, const std::string& prismBackend, std::vector<std::string>& out);
 
 private:
     std::unique_ptr<SpeechBackend> m_backend;

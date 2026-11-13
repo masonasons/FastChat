@@ -80,3 +80,7 @@ std::string SanitizeUtf8(const std::string& s);
 // UTF-8 text <-> filesystem paths (C++20 made u8string() return char8_t).
 std::filesystem::path PathFromUtf8(const std::string& s);
 std::string PathToUtf8(const std::filesystem::path& p);
+
+// A folder as typed: a name or relative path is inside `base` (when there is
+// one); "~" is the home folder. Absolute paths stay as they are.
+std::string ResolveFolder(const std::string& typed, const std::string& base, const std::string& home);

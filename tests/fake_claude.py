@@ -117,6 +117,47 @@ if prompt.startswith("/compact"):  # like Claude Code: what follows is instructi
     out({"type": "user", "message": {"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"},
          "parent_tool_use_id": None, "session_id": session})
     result(0.005)
+elif "PLANMODE" in prompt and not no_tools:
+    # Plan mode: the plan is put to the user with ExitPlanMode; approved, it
+    # goes on in the mode the answer sets (and says so in a status event).
+    launched = args[args.index("--permission-mode") + 1] if "--permission-mode" in args else "?"
+    plan = "1. Read the code\n2. Fix the bug"
+    assistant("msg_1", {"type": "tool_use", "id": "toolu_plan", "name": "ExitPlanMode", "input": {"plan": plan}})
+    out({"type": "control_request", "request_id": "req-plan", "request": {"subtype": "can_use_tool",
+         "tool_name": "ExitPlanMode", "input": {"plan": plan}, "tool_use_id": "toolu_plan"}})
+    reply = next_message()["response"]["response"]
+    if reply["behavior"] == "allow":
+        modes = [p["mode"] for p in reply.get("updatedPermissions", []) if p.get("type") == "setMode" and p.get("destination") == "session"]
+        now = modes[0] if modes else "default"
+        out({"type": "system", "subtype": "status", "status": None, "permissionMode": now, "session_id": session})
+        text = "Launched in %s, approved into %s." % (launched, now)
+    else:
+        text = "Launched in %s, kept planning: %s" % (launched, reply["message"])
+    stream_text(text)
+    assistant("msg_2", {"type": "text", "text": text})
+    result(0.001)
+elif "MODESWITCH" in prompt and not no_tools:
+    # The mode changed while it works (set_permission_mode), as the SDK does;
+    # bypassing permissions needs --allow-dangerously-skip-permissions at launch.
+    request = next_message(timeout=10)
+    if isinstance(request, dict) and request.get("type") == "control_request":
+        mode = request["request"]["mode"]
+        valid = ["default", "acceptEdits", "plan", "auto", "bypassPermissions", "dontAsk", "manual"]
+        refusal = "invalid_mode" if mode not in valid else (
+            "bypass_not_launched" if mode == "bypassPermissions" and "--allow-dangerously-skip-permissions" not in args else None)
+        if refusal:
+            out({"type": "control_response", "response": {"subtype": "error", "request_id": request["request_id"],
+                 "error": refusal}})
+            text = "Refused %s." % mode
+        else:
+            out({"type": "control_response", "response": {"subtype": "success", "request_id": request["request_id"], "response": {}}})
+            out({"type": "system", "subtype": "status", "status": None, "permissionMode": mode, "session_id": session})
+            text = "Now in %s." % mode
+    else:
+        text = "No mode change came."
+    stream_text(text)
+    assistant("msg_1", {"type": "text", "text": text})
+    result(0.001)
 elif "agent" in prompt and not no_tools:
     # A background shell and a subagent, as Claude Code 2.1 reports them.
     import os, tempfile

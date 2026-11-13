@@ -171,12 +171,8 @@ private:
         s->Add(LabeledRow(panel, "&Interrupt speech:", m_interrupt, 0), 0, wxALL, 6);
 
         m_voice = new wxChoice(panel, wxID_ANY);
-        m_voice->Append("Default");
-        m_voice->SetSelection(0);
-        for (const auto& v : Speech::ListVoices(g.engine, g.prismBackend)) {
-            m_voice->Append(U(v));
-            if (o.voice && *o.voice == v) m_voice->SetSelection(m_voice->GetCount() - 1);
-        }
+        m_voices = std::make_unique<VoiceChoice>(m_voice, "Default");
+        m_voices->Load(g.engine, g.prismBackend, o.voice.value_or(std::string()));
         s->Add(LabeledRow(panel, "&Voice:", m_voice, 0), 0, wxALL, 6);
 
         m_rateOwn = new wxCheckBox(panel, wxID_ANY, "Its own speech r&ate");
@@ -260,7 +256,7 @@ private:
         o.speakToolCalls = GetTriChoice(m_speakToolCalls);
         o.speakInBackground = GetTriChoice(m_speakBackground);
         o.interrupt = GetTriChoice(m_interrupt);
-        if (m_voice->GetSelection() > 0) o.voice = S(m_voice->GetStringSelection());
+        if (std::string voice = m_voices->Selected(); !voice.empty()) o.voice = voice;
         else o.voice.reset();
         if (m_rateOwn->GetValue()) o.rate = m_rate->GetValue();
         else o.rate.reset();
@@ -291,6 +287,7 @@ private:
     wxChoice* m_speakBackground;
     wxChoice* m_interrupt;
     wxChoice* m_voice;
+    std::unique_ptr<VoiceChoice> m_voices;
     wxCheckBox* m_rateOwn = nullptr;
     wxSlider* m_rate = nullptr;
     wxChoice* m_soundsOn;

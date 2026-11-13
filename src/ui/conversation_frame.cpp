@@ -42,6 +42,12 @@ enum {
     ID_CLOSE,
     ID_FOCUS_LIST,
     ID_FOCUS_INPUT,
+    ID_EFFORT_FIRST,
+    ID_EFFORT_LAST = ID_EFFORT_FIRST + 12,
+    ID_MODE_FIRST,
+    ID_MODE_LAST = ID_MODE_FIRST + 12,
+    ID_NEXT_EFFORT,
+    ID_NEXT_MODE,
     // message menu
     ID_MSG_VIEW,
     ID_MSG_COPY,
@@ -159,6 +165,8 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
         {wxACCEL_CTRL, 'K', ID_COMPACT},
         {wxACCEL_CTRL, 'T', ID_ACTIVITY},
         {wxACCEL_CTRL | wxACCEL_SHIFT, 'F', ID_ATTACH},
+        {wxACCEL_CTRL | wxACCEL_SHIFT, 'E', ID_NEXT_EFFORT},
+        {wxACCEL_CTRL | wxACCEL_SHIFT, 'M', ID_NEXT_MODE},
     };
     SetAcceleratorTable(wxAcceleratorTable(static_cast<int>(sizeof(accel) / sizeof(accel[0])), accel));
 
@@ -796,6 +804,7 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
     turn.maxSteps = g.maxToolSteps;
     turn.toolContext.root = m_conv.folder;
     turn.toolContext.commandApproval = m_conv.settings.commandApproval.empty() ? g.commandApproval : m_conv.settings.commandApproval;
+    turn.agentMode = provider.kind == "claude_code" ? m_conv.settings.agentMode : std::string();
     if (m_conv.type == ConversationType::Computer) {
         const ProviderKindInfo* kind = FindProviderKind(provider.kind);
         if (kind && (kind->style == ApiStyle::ClaudeCode || kind->style == ApiStyle::Codex)) {
@@ -1163,8 +1172,16 @@ void ConversationFrame::OnToolRunning(const ToolCall& call, const std::string& d
 }
 
 void ConversationFrame::OnApproveCommand(const std::string& what, bool isCommand, std::function<void(bool)> answer) {
-    if (m_autoApprove) {
+    // The setting as it is now, which may have changed since the turn began
+    // (unless Claude Code's own mode decides what is asked).
+    bool agentDecides = UsesClaudeCode() && !m_conv.settings.agentMode.empty();
+    std::string approval = EffectiveApproval();
+    if (m_autoApprove || (!agentDecides && approval == "auto")) {
         answer(true);
+        return;
+    }
+    if (!agentDecides && approval == "deny") {
+        answer(false);
         return;
     }
     EventContext ctx = MakeContext();
@@ -1173,14 +1190,24 @@ void ConversationFrame::OnApproveCommand(const std::string& what, bool isCommand
     if (IsIconized()) Iconize(false);
     Raise();
     // Commands, and a coding agent's other actions (writing or editing files...).
-    wxString question = isCommand ? "Run this command in " + U(m_conv.folder) + "?\n\n" + U(what)
-                                  : "Allow this?\n\n" + U(what);
-    wxRichMessageDialog dlg(this, question, isCommand ? "Run command" : "Allow action", wxYES_NO | wxICON_QUESTION);
-    if (isCommand) dlg.SetYesNoLabels("&Run", "&Don't run");
-    else dlg.SetYesNoLabels("&Allow", "&Don't allow");
-    dlg.ShowCheckBox("Allow everything without asking for the rest of this conversation");
-    bool yes = dlg.ShowModal() == wxID_YES;
-    if (yes && dlg.IsCheckBoxChecked()) m_autoApprove = true;
+    ApprovalRequest request;
+    if (isCommand) {
+        request.title = "Run command";
+        request.question = m_conv.folder.empty() ? wxString("Run this command?") : "Run this command in " + U(m_conv.folder) + "?";
+        request.boxLabel = "&Command:";
+        request.yesLabel = "&Run";
+        request.noLabel = "&Don't run";
+    } else {
+        request.title = "Allow action";
+        request.question = "Allow this?";
+        request.boxLabel = "&Details:";
+        request.yesLabel = "&Allow";
+        request.noLabel = "&Don't allow";
+    }
+    request.what = what;
+    bool all = false;
+    bool yes = AskToAllow(this, request, all);
+    if (all) m_autoApprove = true;
     if (isCommand) SetStatus(yes ? "Running " + U(OneLine(what, 80)) : wxString("Command declined"));
     else SetStatus(yes ? "Allowed" : "Declined");
     answer(yes);
@@ -1201,6 +1228,30 @@ void ConversationFrame::OnAskQuestions(const std::vector<AgentQuestion>& questio
     bool answered = AskAgentQuestions(this, asker, questions, answers);
     SetStatus(answered ? wxString("Answered") : wxString("Not answered"));
     answer(answered, answers);
+}
+
+void ConversationFrame::OnApprovePlan(const std::string& plan, std::function<void(PlanDecision)> answer) {
+    // Always asked: it is a decision about the work, not a permission.
+    EventContext ctx = MakeContext();
+    ctx.Set("summary", "Plan ready").Set("tool", "plan");
+    NotifyEvent(EventId::QuestionAsked, ctx, &m_conv.settings);
+    if (IsIconized()) Iconize(false);
+    Raise();
+    ProviderConfig provider;
+    std::string model, error;
+    wxString asker = ResolveModel(provider, model, error) && !provider.name.empty() ? U(provider.name) : wxString("The model");
+    PlanDecision decision = AskPlanApproval(this, asker, plan);
+    SetStatus(decision.start ? "Starting on the plan" : "Keeping on planning");
+    answer(decision);
+}
+
+void ConversationFrame::OnAgentModeChanged(const std::string& mode) {
+    if (mode == m_conv.settings.agentMode) return;
+    m_conv.settings.agentMode = mode;
+    SaveConversation();
+    wxString said = "Mode: " + PermissionName(mode);
+    SetStatus(said);
+    AppSpeech().Announce(S(said));
 }
 
 void ConversationFrame::OnFinished(Outcome outcome, const std::string& error) {
@@ -1398,6 +1449,8 @@ void ConversationFrame::OnCommand(wxCommandEvent& e) {
         }
         case ID_CLOSE: Close(); break;
         case ID_ATTACH: ChooseAttachments(); break;
+        case ID_NEXT_EFFORT: NextEffort(); break;
+        case ID_NEXT_MODE: NextPermission(); break;
         case ID_FOCUS_LIST:
             if (m_list->HasFocus()) m_input->SetFocus();
             else m_list->SetFocus();
@@ -1416,6 +1469,15 @@ void ConversationFrame::OnCommand(wxCommandEvent& e) {
             if (e.GetId() >= ID_BUFFER_FIRST && e.GetId() < ID_BUFFER_FIRST + static_cast<int>(BUF_COUNT)) {
                 SwitchBuffer(e.GetId() - ID_BUFFER_FIRST);
                 m_list->SetFocus();
+            } else if (e.GetId() >= ID_EFFORT_FIRST && e.GetId() <= ID_EFFORT_LAST) {
+                int i = e.GetId() - ID_EFFORT_FIRST;
+                std::vector<std::string> levels = EffortLevels();
+                if (i == 0) SetEffort(std::string());
+                else if (i - 1 < static_cast<int>(levels.size())) SetEffort(levels[i - 1]);
+            } else if (e.GetId() >= ID_MODE_FIRST && e.GetId() <= ID_MODE_LAST) {
+                auto modes = PermissionChoices();
+                int i = e.GetId() - ID_MODE_FIRST;
+                if (i < static_cast<int>(modes.size())) SetPermission(modes[i].first);
             } else {
                 e.Skip();
             }
@@ -1436,6 +1498,33 @@ void ConversationFrame::ShowActions() {
     wxMenu menu;
     if (m_running) menu.Append(ID_STOP, "S&top responding\tEscape");
     menu.Append(ID_CHANGE_MODEL, "Change &model...\tCtrl+M");
+    // Reasoning effort, for models that have it.
+    std::vector<std::string> levels = EffortLevels();
+    if (!levels.empty()) {
+        auto* effort = new wxMenu();
+        const std::string& current = m_conv.settings.reasoningEffort;
+        effort->AppendRadioItem(ID_EFFORT_FIRST, "&Default (" + EffortName(AppSettings().general.reasoningEffort) + ")");
+        for (size_t i = 0; i < levels.size() && ID_EFFORT_FIRST + 1 + static_cast<int>(i) <= ID_EFFORT_LAST; i++) {
+            effort->AppendRadioItem(ID_EFFORT_FIRST + 1 + static_cast<int>(i), EffortName(levels[i]));
+            if (levels[i] == current) effort->Check(ID_EFFORT_FIRST + 1 + static_cast<int>(i), true);
+        }
+        if (current.empty()) effort->Check(ID_EFFORT_FIRST, true);
+        menu.AppendSubMenu(effort, "Reasoning e&ffort (Ctrl+Shift+E for the next)");
+    }
+    // What runs without asking: Claude Code's permission modes, or FastChat's setting.
+    std::vector<std::pair<std::string, wxString>> modes = PermissionChoices();
+    if (!modes.empty()) {
+        auto* mode = new wxMenu();
+        std::string current = CurrentPermission();
+        for (size_t i = 0; i < modes.size() && ID_MODE_FIRST + static_cast<int>(i) <= ID_MODE_LAST; i++) {
+            mode->AppendRadioItem(ID_MODE_FIRST + static_cast<int>(i), modes[i].second);
+            if (modes[i].first == current) mode->Check(ID_MODE_FIRST + static_cast<int>(i), true);
+        }
+        wxString title = UsesClaudeCode() ? "Permission mo&de (Ctrl+Shift+M for the next)"
+                         : m_conv.type == ConversationType::Computer ? "Actions without as&king (Ctrl+Shift+M for the next)"
+                                                                     : "Comman&ds (Ctrl+Shift+M for the next)";
+        menu.AppendSubMenu(mode, title);
+    }
     menu.Append(ID_CHAT_SETTINGS, "Conversation &settings...\tCtrl+Shift+,");
     menu.Append(ID_REGENERATE, "&Regenerate the last response\tCtrl+R");
     menu.Append(ID_COMPACT, "Com&pact the conversation\tCtrl+K");
@@ -1697,6 +1786,141 @@ void ConversationFrame::Regenerate() {
         }
     }
     SetStatus("There is nothing to regenerate");
+}
+
+// ---------------------------------------------------------------------------
+// Reasoning effort and permissions, changed on the fly
+// ---------------------------------------------------------------------------
+
+bool ConversationFrame::UsesClaudeCode() const {
+    ProviderConfig provider;
+    std::string model, error;
+    return m_conv.type == ConversationType::Code && ResolveModel(provider, model, error) && provider.kind == "claude_code";
+}
+
+std::vector<std::string> ConversationFrame::EffortLevels() const {
+    ProviderConfig provider;
+    std::string model, error;
+    if (!ResolveModel(provider, model, error)) return {};
+    ModelInfo info;
+    bool known = AppProviderCache().FindModel(provider.id, model, info);
+    std::vector<std::string> levels = EffortLevelsFor(provider.kind, model, known ? &info : nullptr);
+    // The conversation's own, even where it would not be offered now (another model).
+    const std::string& own = m_conv.settings.reasoningEffort;
+    if (!levels.empty() && !own.empty() && std::find(levels.begin(), levels.end(), own) == levels.end()) levels.push_back(own);
+    return levels;
+}
+
+void ConversationFrame::SetEffort(const std::string& key) {
+    m_conv.settings.reasoningEffort = key;
+    SaveConversation();
+    wxString name = key.empty() ? "default (" + EffortName(AppSettings().general.reasoningEffort) + ")" : EffortName(key);
+    wxString said = "Reasoning effort " + name + (m_running ? ", from the next message" : "");
+    SetStatus(said);
+    AppSpeech().Announce(S(said));
+}
+
+void ConversationFrame::NextEffort() {
+    std::vector<std::string> levels = EffortLevels();
+    if (levels.empty()) {
+        SetStatus("This model has no reasoning effort to set");
+        AppSpeech().Announce("This model has no reasoning effort to set");
+        return;
+    }
+    // Default, then each level, then default again.
+    const std::string& current = m_conv.settings.reasoningEffort;
+    auto it = std::find(levels.begin(), levels.end(), current);
+    if (current.empty()) SetEffort(levels.front());
+    else if (it == levels.end() || it + 1 == levels.end()) SetEffort(std::string());
+    else SetEffort(*(it + 1));
+}
+
+std::string ConversationFrame::EffectiveApproval() const {
+    const GeneralSettings& g = AppSettings().general;
+    if (!m_conv.settings.commandApproval.empty()) return m_conv.settings.commandApproval;
+    return m_conv.type == ConversationType::Computer ? g.computerApproval : g.commandApproval;
+}
+
+wxString ConversationFrame::PermissionName(const std::string& key) const {
+    if (UsesClaudeCode()) {
+        if (key == "default") return "Ask before edits and commands";
+        if (key == "acceptEdits") return "Accept edits, ask before commands";
+        if (key == "plan") return "Plan first (only reads, until you approve a plan)";
+        if (key == "auto") return "Auto (Claude Code decides what needs asking)";
+        if (key == "dontAsk") return "Don't ask (refuse what is not allowed already)";
+        if (key == "bypassPermissions") return "Allow everything (bypass permissions)";
+    }
+    bool computer = m_conv.type == ConversationType::Computer;
+    if (key == "ask") return computer ? "Ask before each action" : "Ask each time";
+    if (key == "auto") return computer ? "Act without asking" : "Run without asking";
+    if (key == "deny") return computer ? "Only look, never act" : "Never run commands";
+    return U(key);
+}
+
+std::vector<std::pair<std::string, wxString>> ConversationFrame::PermissionChoices() const {
+    std::vector<std::pair<std::string, wxString>> choices;
+    if (m_conv.type == ConversationType::Chat) return choices;
+    const GeneralSettings& g = AppSettings().general;
+    std::string global = m_conv.type == ConversationType::Computer ? g.computerApproval : g.commandApproval;
+    if (UsesClaudeCode()) {
+        // "Default": as FastChat's Commands setting has it (Run without asking:
+        // edits accepted, and FastChat allows the rest).
+        std::string setting = EffectiveApproval();
+        wxString name = setting == "auto" ? "Run without asking" : setting == "deny" ? "Never run commands" : "Ask each time";
+        choices.emplace_back("", "&Default (" + name + ", from the settings)");
+        for (const char* key : {"default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"}) {
+            choices.emplace_back(key, PermissionName(key));
+        }
+        return choices;
+    }
+    choices.emplace_back("", "&Default (" + PermissionName(global) + ")");
+    for (const char* key : {"ask", "auto", "deny"}) choices.emplace_back(key, PermissionName(key));
+    return choices;
+}
+
+std::string ConversationFrame::CurrentPermission() const {
+    return UsesClaudeCode() ? m_conv.settings.agentMode : m_conv.settings.commandApproval;
+}
+
+void ConversationFrame::SetPermission(const std::string& key) {
+    bool claude = UsesClaudeCode();
+    if (claude) m_conv.settings.agentMode = key;
+    else m_conv.settings.commandApproval = key;
+    SaveConversation();
+    wxString name;
+    for (const auto& [k, label] : PermissionChoices()) {
+        if (k == key) name = label;
+    }
+    name.Replace("&", "");
+    wxString said = (claude ? "Mode: " : m_conv.type == ConversationType::Computer ? "Actions: " : "Commands: ") + name;
+    if (m_running && claude) {
+        // Claude Code switches now; "Default" is the mode FastChat's setting gives.
+        std::string mode = key;
+        if (mode.empty()) mode = EffectiveApproval() == "auto" ? "acceptEdits" : "default";
+        m_runner->SetAgentMode(mode);
+    }
+    SetStatus(said);
+    AppSpeech().Announce(S(said));
+}
+
+void ConversationFrame::NextPermission() {
+    if (PermissionChoices().empty()) {
+        SetStatus("Chat conversations run nothing");
+        AppSpeech().Announce("Chat conversations run nothing");
+        return;
+    }
+    // Like Claude Code's Shift+Tab: ask, accept edits, plan, auto, and around.
+    std::vector<std::string> cycle;
+    std::string current = CurrentPermission();
+    if (UsesClaudeCode()) {
+        cycle = {"default", "acceptEdits", "plan", "auto"};
+        if (current.empty()) current = EffectiveApproval() == "auto" ? "acceptEdits" : "default";
+    } else {
+        cycle = {"ask", "auto", "deny"};
+        if (current.empty()) current = EffectiveApproval();
+    }
+    auto it = std::find(cycle.begin(), cycle.end(), current);
+    SetPermission(it == cycle.end() || it + 1 == cycle.end() ? cycle.front() : *(it + 1));
 }
 
 void ConversationFrame::ChangeModel() {

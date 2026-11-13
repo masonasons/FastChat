@@ -66,6 +66,33 @@ std::optional<bool> GetTriChoice(wxChoice* choice);
 
 // The names of reasoning effort settings, with "" first ("Model default").
 const std::vector<std::pair<std::string, wxString>>& EffortChoices();
+// One effort setting's name ("High"; "" gives "Model default").
+wxString EffortName(const std::string& key);
+
+// Fills a choice with a speech engine's voices after a first item ("Default"),
+// without holding up the window: the voices are listed on a worker thread the
+// first time (with many voices that takes a while) and kept for later.
+class VoiceChoice {
+public:
+    VoiceChoice(wxChoice* choice, const wxString& first) : m_choice(choice), m_first(first) {}
+    ~VoiceChoice() { *m_alive = false; }
+    VoiceChoice(const VoiceChoice&) = delete;
+    VoiceChoice& operator=(const VoiceChoice&) = delete;
+    // Lists the engine's voices, selecting `want` ("" for the first item).
+    void Load(const std::string& engine, const std::string& prismBackend, const std::string& want);
+    // The chosen voice, "" for the first item; while listing, the one wanted.
+    std::string Selected() const;
+
+private:
+    void Fill(const std::vector<std::string>& voices);
+
+    wxChoice* m_choice;
+    wxString m_first;
+    std::string m_want;
+    bool m_loaded = false;
+    int m_generation = 0;
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
+};
 
 // A model's name for lists and the status bar: "Claude Opus 5.5" or the id.
 std::string ModelDisplayName(const std::string& providerId, const std::string& modelId);

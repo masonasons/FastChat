@@ -11,6 +11,7 @@
 #include <vector>
 
 struct AgentQuestion;
+struct PlanDecision;
 
 // Read-only text in a multiline box, for reading a message line by line,
 // account details, conversation information.
@@ -49,3 +50,21 @@ bool EditConversationSettings(wxWindow* parent, Conversation& conversation);
 // otherwise one answer per question.
 bool AskAgentQuestions(wxWindow* parent, const wxString& asker, const std::vector<AgentQuestion>& questions,
                        std::vector<std::string>& answers);
+
+// Asking before a command or another action runs: the question, then what it
+// is in a read-only box (focused, so it is read first). `allowAll`: the user
+// also chose to allow everything for the rest of the conversation.
+struct ApprovalRequest {
+    wxString title;       // "Run command"
+    wxString question;    // "Run this command in the project folder?"
+    wxString boxLabel;    // "&Command:"
+    std::string what;     // the command, or what the action does
+    wxString yesLabel;    // "&Run"
+    wxString noLabel;     // "&Don't run"
+};
+bool AskToAllow(wxWindow* parent, const ApprovalRequest& request, bool& allowAll);
+
+// A coding agent's plan (Claude Code's plan mode): start on it accepting
+// edits, start asking before edits, or keep planning (with what to change).
+PlanDecision AskPlanApproval(wxWindow* parent, const wxString& asker, const std::string& plan);
+

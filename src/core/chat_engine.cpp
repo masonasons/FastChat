@@ -90,6 +90,43 @@ bool ChatRunner::AskQuestions(const std::vector<AgentQuestion>& questions, std::
     return true;
 }
 
+PlanDecision ChatRunner::AskPlan(const std::string& plan) {
+    auto promise = std::make_shared<std::promise<PlanDecision>>();
+    auto replied = std::make_shared<std::atomic<bool>>(false);
+    std::future<PlanDecision> future = promise->get_future();
+    std::weak_ptr<ChatRunner> weak = weak_from_this();
+    m_post([weak, plan, promise, replied]() {
+        auto self = weak.lock();
+        auto answer = [promise, replied](PlanDecision d) {
+            if (!replied->exchange(true)) promise->set_value(std::move(d));
+        };
+        if (!self || !self->m_listener || self->m_cancel) {
+            answer(PlanDecision());
+            return;
+        }
+        self->m_listener->OnApprovePlan(plan, answer);
+    });
+    while (future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+        if (m_cancel) {
+            if (!replied->exchange(true)) promise->set_value(PlanDecision());
+            break;
+        }
+    }
+    return future.get();
+}
+
+void ChatRunner::SetAgentMode(const std::string& mode) {
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    m_modeChange = mode;
+}
+
+std::string ChatRunner::TakeModeChange() {
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    std::string mode;
+    mode.swap(m_modeChange);
+    return mode;
+}
+
 void ChatRunner::Run(ChatTurn turn) {
     // Nothing that goes wrong here may end the program: report it instead.
     std::string problem;
@@ -125,6 +162,7 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
     agent.folder = turn.toolContext.root;
     agent.tools = turn.tools;
     agent.approval = turn.toolContext.commandApproval;
+    agent.permissionMode = turn.agentMode;
     // Continue the agent's own session when nothing but new messages from the
     // user came after its last reply; otherwise start afresh with the history.
     // Its compactions (/compact gets no reply) continue the same session.
@@ -163,6 +201,11 @@ void ChatRunner::RunAgentTurn(ChatTurn turn, Provider& provider) {
     callbacks.approve = [this](const std::string& what, bool isCommand) { return AskApproval(what, isCommand); };
     callbacks.askQuestions = [this](const std::vector<AgentQuestion>& questions, std::vector<std::string>& answers) {
         return AskQuestions(questions, answers);
+    };
+    callbacks.approvePlan = [this](const std::string& plan) { return AskPlan(plan); };
+    callbacks.takeModeChange = [this]() { return TakeModeChange(); };
+    callbacks.onModeChanged = [this](const std::string& mode) {
+        Post([mode](ChatListener& l) { l.OnAgentModeChanged(mode); });
     };
     callbacks.onLimits = [providerId](const std::vector<std::pair<std::string, std::string>>& limits, const std::string& summary) {
         AppProviderCache().SetRateLimits(providerId, limits);

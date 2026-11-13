@@ -21,6 +21,8 @@
 
 #include <miniz.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -84,6 +86,45 @@ static void TestSse() {
 }
 
 static void TestUtil() {
+    // Folders as typed for a code conversation: names inside the base folder.
+#ifdef _WIN32
+    CHECK_EQ(ResolveFolder("FastChat", "C:\\dev", "C:\\Users\\me"), std::string("C:\\dev\\FastChat"));
+    CHECK_EQ(ResolveFolder("games\\new one\\", "C:\\dev\\", ""), std::string("C:\\dev\\games\\new one"));
+    CHECK_EQ(ResolveFolder("D:\\work\\app", "C:\\dev", ""), std::string("D:\\work\\app"));
+    CHECK_EQ(ResolveFolder("\"C:\\My dev\\x\"", "", ""), std::string("C:\\My dev\\x"));
+    CHECK_EQ(ResolveFolder("", "C:\\dev", ""), std::string("C:\\dev"));
+    CHECK_EQ(ResolveFolder("~\\src", "C:\\dev", "C:\\Users\\me"), std::string("C:\\Users\\me\\src"));
+    CHECK_EQ(ResolveFolder("C:\\", "", ""), std::string("C:\\"));
+    CHECK_EQ(ResolveFolder("..\\other", "C:\\dev\\a", ""), std::string("C:\\dev\\other"));
+#else
+    CHECK_EQ(ResolveFolder("FastChat", "/Users/me/dev", "/Users/me"), std::string("/Users/me/dev/FastChat"));
+    CHECK_EQ(ResolveFolder("/opt/app/", "/Users/me/dev", ""), std::string("/opt/app"));
+    CHECK_EQ(ResolveFolder("~/src", "", "/Users/me"), std::string("/Users/me/src"));
+    CHECK_EQ(ResolveFolder("/", "", ""), std::string("/"));
+#endif
+    CHECK_EQ(ResolveFolder("app", "", ""), std::string("app"));  // no base: as typed
+
+    // Reasoning effort levels offered per provider and model.
+    using Levels = std::vector<std::string>;
+    CHECK(EffortLevelsFor("claude_code", "opus", nullptr) == Levels({"low", "medium", "high", "xhigh", "max"}));
+    CHECK(EffortLevelsFor("codex", "gpt-5.5", nullptr) == Levels({"none", "low", "medium", "high", "xhigh"}));
+    ModelInfo plain;
+    plain.id = "llama3";
+    CHECK(EffortLevelsFor("ollama", "llama3", &plain).empty());  // does not think
+    ModelInfo thinker = plain;
+    thinker.reasoning = true;
+    CHECK(EffortLevelsFor("ollama_cloud", "qwen3", &thinker) == Levels({"none", "high"}));
+    CHECK(EffortLevelsFor("ollama_cloud", "gpt-oss:120b", &thinker) == Levels({"low", "medium", "high"}));
+    CHECK(EffortLevelsFor("gemini", "gemini-2.5-pro", nullptr) == Levels({"none", "low", "medium", "high"}));
+    CHECK(EffortLevelsFor("gemini", "gemini-3-pro", nullptr) == Levels({"low", "medium", "high"}));
+    ModelInfo opus;
+    opus.id = "claude-opus-5-5";
+    opus.reasoning = true;
+    opus.effortLevels = {"low", "medium", "high", "max"};
+    CHECK(EffortLevelsFor("anthropic", "claude-opus-5-5", &opus) == Levels({"none", "low", "medium", "high", "max"}));
+    CHECK(EffortLevelsFor("anthropic", "claude-unknown", nullptr) == Levels({"none", "low", "medium", "high"}));
+    CHECK(EffortLevelsFor("openrouter", "x/y", nullptr) == Levels({"none", "low", "medium", "high", "xhigh"}));
+    CHECK(EffortLevelsFor("openai", "o9", nullptr).back() == "max");
     CHECK_EQ(WideToUtf8(Utf8ToWide("héllo – 😀")), std::string("héllo – 😀"));
     CHECK_EQ(FormatThousands(1234567), std::string("1,234,567"));
     CHECK_EQ(FormatTokensShort(1000000), std::string("1M"));
@@ -257,6 +298,21 @@ struct TestListener : ChatListener {
     void OnAskQuestions(const std::vector<AgentQuestion>& q, std::function<void(bool, std::vector<std::string>)> answer) override {
         asked = q;
         answer(answerQuestions, questionAnswers);
+    }
+    // Plans to approve (Claude Code's plan mode), and the permission modes reported.
+    std::vector<std::string> plans;
+    PlanDecision planDecision;
+    void OnApprovePlan(const std::string& plan, std::function<void(PlanDecision)> answer) override {
+        plans.push_back(plan);
+        answer(planDecision);
+    }
+    std::vector<std::string> modes;
+    void OnAgentModeChanged(const std::string& mode) override { modes.push_back(mode); }
+    bool Said(const std::string& content) const {
+        for (const auto& m : messages) {
+            if (m.content == content) return true;
+        }
+        return false;
     }
     std::vector<std::pair<std::string, std::string>> problems;
     std::vector<std::string> statuses;
@@ -801,6 +857,54 @@ static void TestAgents(const std::string& root) {
         bool toldNo = false;
         for (const auto& m : declined.messages) toldNo = toldNo || m.content == "You did not answer.";
         CHECK(toldNo);
+    }
+
+    // Plan mode: the plan is always put to the user (even with everything
+    // allowed); approved, Claude Code goes on in the mode chosen, and FastChat
+    // hears of it. Kept planning, what the user said goes back.
+    std::cout << "  claude code: plan mode\n";
+    {
+        ChatTurn plan = live;
+        plan.tools = true;
+        plan.toolContext.root = root;
+        plan.toolContext.commandApproval = "auto";
+        plan.agentMode = "plan";
+        plan.request.messages = {UserMessage("PLANMODE please")};
+        TestListener started = Drive(plan, nullptr, [](TestListener& l) {
+            l.planDecision.start = true;
+            l.planDecision.mode = "acceptEdits";
+        });
+        CHECK(started.outcome == ChatListener::Outcome::Done);
+        CHECK(started.plans.size() == 1 && started.plans[0] == "1. Read the code\n2. Fix the bug");
+        CHECK(started.approvals.empty());  // a decision, not a permission
+        CHECK(started.modes == std::vector<std::string>{"acceptEdits"});
+        CHECK(started.Said("Launched in plan, approved into acceptEdits."));
+
+        TestListener kept = Drive(plan, nullptr, [](TestListener& l) { l.planDecision.feedback = "Add tests too"; });
+        CHECK(kept.modes.empty());
+        CHECK(kept.Said("Launched in plan, kept planning: The user wants to keep planning. What they said: Add tests too"));
+    }
+
+    // The mode changes at once when the user picks another while it works;
+    // one Claude Code refuses goes back to what it was.
+    std::cout << "  claude code: switching modes while it works\n";
+    {
+        ChatTurn sw = live;
+        sw.tools = true;
+        sw.toolContext.root = root;
+        sw.toolContext.commandApproval = "ask";
+        sw.request.messages = {UserMessage("MODESWITCH")};
+        TestListener planned = Drive(sw, [](ChatRunner& r) { r.SetAgentMode("plan"); });
+        CHECK(planned.Said("Now in plan."));
+        CHECK(planned.modes.empty());  // the UI chose it; nothing to report back
+        TestListener bypass = Drive(sw, [](ChatRunner& r) { r.SetAgentMode("bypassPermissions"); });
+        CHECK(bypass.Said("Now in bypassPermissions."));  // launched able to
+        TestListener refused = Drive(sw, [](ChatRunner& r) { r.SetAgentMode("sideways"); });
+        CHECK(refused.Said("Refused sideways."));
+        CHECK(refused.modes == std::vector<std::string>{"default"});  // back to the launch mode
+        bool told = false;
+        for (const auto& st : refused.statuses) told = told || st.find("invalid_mode") != std::string::npos;
+        CHECK(told);
     }
 
     // Attached images and PDFs go to Claude Code as content blocks, in the
@@ -1639,8 +1743,39 @@ int main() {
         HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 #endif
         // The system's own voices, without speaking: listed, and one can be chosen.
+        auto t0 = std::chrono::steady_clock::now();
         std::vector<std::string> voices = Speech::ListVoices("system", "");
-        std::cout << Speech::SystemVoicesName() << ": " << voices.size() << "\n";
+        auto t1 = std::chrono::steady_clock::now();
+        std::cout << Speech::SystemVoicesName() << ": " << voices.size() << " in "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << " ms\n";
+        // Listed on a worker thread for the settings (which open without
+        // waiting), the same voices, then kept: asked again, they come at once.
+        {
+            std::vector<std::string> cached;
+            CHECK(!Speech::CachedVoices("system", "", cached));
+            std::mutex m;
+            std::condition_variable cv;
+            std::vector<std::string> background;
+            int calls = 0;
+            auto done = [&](const std::vector<std::string>& v) {
+                std::lock_guard<std::mutex> lock(m);
+                background = v;
+                calls++;
+                cv.notify_all();
+            };
+            Speech::LoadVoices("system", "", done);
+            Speech::LoadVoices("system", "", done);  // while it lists: waits for the same list
+            {
+                std::unique_lock<std::mutex> lock(m);
+                cv.wait_for(lock, std::chrono::seconds(60), [&] { return calls == 2; });
+            }
+            CHECK_EQ(calls, 2);
+            CHECK(background == voices);
+            CHECK(Speech::CachedVoices("system", "", cached) && cached == voices);
+            bool atOnce = false;
+            Speech::LoadVoices("system", "", [&](const std::vector<std::string>& v) { atOnce = v == voices; });
+            CHECK(atOnce);
+        }
         CHECK(!voices.empty());
         auto backend = CreateSystemVoiceBackend();
         CHECK(backend && !voices.empty() && backend->SetVoice(voices.front()));

@@ -45,6 +45,8 @@ public:
     void OnApproveCommand(const std::string& what, bool isCommand, std::function<void(bool)> answer) override;
     void OnAskQuestions(const std::vector<AgentQuestion>& questions,
                         std::function<void(bool answered, std::vector<std::string> answers)> answer) override;
+    void OnApprovePlan(const std::string& plan, std::function<void(PlanDecision)> answer) override;
+    void OnAgentModeChanged(const std::string& mode) override;
     void OnFinished(Outcome outcome, const std::string& error) override;
     void OnStatus(const std::string& text) override;
     void OnProblem(const std::string& error, const std::string& details) override;
@@ -116,6 +118,17 @@ private:
     void RegenerateFrom(int index);
     void Regenerate();
     void ChangeModel();
+    // Reasoning effort and what runs without asking, changed on the fly.
+    bool UsesClaudeCode() const;  // a code conversation on Claude Code
+    std::vector<std::string> EffortLevels() const;
+    void SetEffort(const std::string& key);
+    void NextEffort();
+    std::string EffectiveApproval() const;  // "ask", "auto", "deny"
+    wxString PermissionName(const std::string& key) const;
+    std::vector<std::pair<std::string, wxString>> PermissionChoices() const;  // key ("" default), label
+    std::string CurrentPermission() const;
+    void SetPermission(const std::string& key);
+    void NextPermission();
     void Rename();
     void ShowInfo();
     void Export();

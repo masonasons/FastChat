@@ -132,6 +132,39 @@ const ProviderKindInfo* FindProviderKind(const std::string& key) {
     return nullptr;
 }
 
+std::vector<std::string> EffortLevelsFor(const std::string& providerKind, const std::string& model, const ModelInfo* info) {
+    const ProviderKindInfo* kind = FindProviderKind(providerKind);
+    ApiStyle style = kind ? kind->style : ApiStyle::OpenAI;
+    std::string id = ToLower(model);
+    // Coding agents take any level and always think.
+    if (style == ApiStyle::ClaudeCode) return {"low", "medium", "high", "xhigh", "max"};  // "none" would be low
+    if (style == ApiStyle::Codex) return {"none", "low", "medium", "high", "xhigh"};       // max would be xhigh
+    // A model the provider says does not think has nothing to set.
+    if (info && !info->id.empty() && !info->reasoning) return {};
+    switch (style) {
+        case ApiStyle::Anthropic: {
+            std::vector<std::string> levels{"none"};  // no thinking (adaptive models: the least)
+            if (info && !info->effortLevels.empty()) {
+                levels.insert(levels.end(), info->effortLevels.begin(), info->effortLevels.end());
+            } else {
+                levels.insert(levels.end(), {"low", "medium", "high"});  // a thinking budget each
+            }
+            return levels;
+        }
+        case ApiStyle::Gemini:
+            // Gemini 2 has a thinking budget (0 turns it off); later ones a level.
+            if (id.find("gemini-2") != std::string::npos) return {"none", "low", "medium", "high"};
+            return {"low", "medium", "high"};
+        case ApiStyle::Ollama:
+            // gpt-oss takes a level; the others think or do not.
+            if (id.find("gpt-oss") != std::string::npos) return {"low", "medium", "high"};
+            return {"none", "high"};
+        default:
+            if (providerKind == "openrouter") return {"none", "low", "medium", "high", "xhigh"};  // max would be xhigh
+            return {"none", "low", "medium", "high", "xhigh", "max"};
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------

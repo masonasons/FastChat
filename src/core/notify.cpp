@@ -156,6 +156,8 @@ void SpeakOnRequest(const std::string& text, const ConversationSettings* conv) {
 
 void ApplyOutputSettings() {
     AppSpeech().Configure(AppSettings().speech);
+    // Listed ahead, so the settings have them at hand.
+    Speech::LoadVoices(AppSettings().speech.engine, AppSettings().speech.prismBackend, nullptr);
     AppSound().SetVolume(AppSettings().sounds.volume);
     ForgetSoundPackFiles();  // pick up packs added or changed meanwhile
 }

@@ -46,6 +46,13 @@ struct ProviderKindInfo {
 const std::vector<ProviderKindInfo>& ProviderKinds();
 const ProviderKindInfo* FindProviderKind(const std::string& key);
 
+struct ModelInfo;
+// The reasoning effort levels ("none", "low", "medium", "high", "xhigh", "max")
+// worth offering for a model of this kind of provider, each one doing something
+// different there. Empty when the model is known not to reason. `info` is what
+// the provider listed for the model, if anything.
+std::vector<std::string> EffortLevelsFor(const std::string& providerKind, const std::string& model, const ModelInfo* info);
+
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------
@@ -170,7 +177,18 @@ struct AgentTurn {
     std::string folder;           // where it works (code conversations)
     bool tools = false;           // false: a plain chat, no tools
     std::string approval = "ask"; // "ask", "auto", "deny"
+    // Claude Code's permission mode, chosen by the user ("default", "acceptEdits",
+    // "plan", "auto", "bypassPermissions", "dontAsk"). Empty: from `approval`.
+    // When set, Claude Code's mode decides what needs asking, and FastChat asks.
+    std::string permissionMode;
     std::string resumeSession;    // continue this session instead of sending the history
+};
+
+// What the user decided about a coding agent's plan (Claude Code's plan mode).
+struct PlanDecision {
+    bool start = false;      // start on it; false: keep planning
+    std::string mode;        // the permission mode to work on it in ("acceptEdits", "default"...)
+    std::string feedback;    // what to change, when they keep planning
 };
 
 // A question a coding agent asks the user, with choices (Claude Code's
@@ -207,6 +225,12 @@ struct AgentCallbacks : StreamCallbacks {
     std::function<void(const std::string&)> onStatus;
     // Subagents and background shells starting, progressing and ending.
     std::function<void(const ActivityEvent&)> onActivity;
+    // A plan for the user to approve (blocks).
+    std::function<PlanDecision(const std::string& plan)> approvePlan;
+    // A permission mode the user chose while it runs ("" when none since last asked).
+    std::function<std::string()> takeModeChange;
+    // The agent's permission mode changed (a plan approved, the agent entering plan mode...).
+    std::function<void(const std::string& mode)> onModeChanged;
 };
 
 class Provider {

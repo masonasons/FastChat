@@ -7,7 +7,10 @@ providers, written in C++ with wxWidgets.
 
 - **Conversations list** (the main window). New conversation (Ctrl+N) asks for a
   name (leave it empty to have one generated after the first reply), the type -
-  chat, code or computer use - and for code, a folder.
+  chat, code or computer use - and for code, a folder. With a base folder for
+  code conversations set (Settings > General, such as your dev folder), the
+  folder starts there and a project's name is enough ("FastChat" for
+  C:\dev\FastChat); a folder that does not exist yet is created when you say so.
 - **Conversation windows**: the messages, a multiline box to write in (Enter
   sends, Shift+Enter starts a new line; can be switched to Ctrl+Enter), an
   Actions button, and a status bar with the model, context used of the model's
@@ -40,7 +43,15 @@ providers, written in C++ with wxWidgets.
   are also written to fastchat.log.
 - **Code conversations** give the model tools inside the folder: list, read,
   find, search, write and edit files, and run commands (asks first by default;
-  can be set to run freely or never).
+  can be set to run freely or never). Asking shows the command (or what an
+  action does) in a read-only box, focused so it is read first and can be gone
+  through line by line; Run (or Enter) runs it, Don't run (or Escape) doesn't.
+- **On the fly, from Actions**: Reasoning effort (Ctrl+Shift+E for the next
+  level) offers the levels the model takes - Claude Code low to max, Codex none
+  to extra high, Anthropic's per model, Gemini's and Ollama's where they think -
+  and is left out for models that don't reason. Commands (Ctrl+Shift+M for the
+  next) switches between asking, running without asking and never running, from
+  the next command on; computer use has the same for its actions.
 - **Computer use conversations** (Windows and the Mac) let a model operate this computer.
   It sees the window in front through its accessibility tree (every control,
   numbered, the way a screen reader reads it) and, for models that take
@@ -71,7 +82,16 @@ providers, written in C++ with wxWidgets.
   conversations. Claude Code's approval requests become FastChat's Allow / Don't
   allow dialog. FastChat starts it in its default permission mode while asking
   is on, even if your own settings use auto mode; your CLAUDE.md, MCP servers
-  and allow list still apply. When Claude Code asks you questions with choices,
+  and allow list still apply. Actions > Permission mode (Ctrl+Shift+M cycles
+  ask, accept edits, plan and auto, as Shift+Tab does in Claude Code) chooses
+  Claude Code's own mode for the conversation: ask before edits and commands,
+  accept edits, plan first, auto (Claude Code decides what needs asking),
+  don't ask (refuse what isn't allowed already), or allow everything. A change
+  while it works takes effect at once. In plan mode it only reads until its
+  plan is ready; the Plan ready dialog shows the plan and starts on it accepting
+  edits or asking before them, or keeps planning with what you want changed.
+  When Claude Code changes mode itself (a plan approved, entering plan mode),
+  the conversation follows and says so. When Claude Code asks you questions with choices,
   a Questions dialog shows each one as a group of options (radio buttons for one
   answer, check boxes for any number) with a box for an answer in your own
   words; Answer sends your choices back, Don't answer tells it you declined.
@@ -91,7 +111,9 @@ providers, written in C++ with wxWidgets.
   64-bit FastChat cannot load itself: FastChatSapi32.exe, a small 32-bit helper
   beside it, speaks with them (a voice installed only for 32-bit programs is
   listed as "Name (32-bit)"), and an old voice that crashes takes down only the
-  helper, which starts again when next needed.
+  helper, which starts again when next needed. The voices are listed once in
+  the background (when FastChat starts) and kept, so the settings open at once
+  even with hundreds of voices installed.
 - **Sound packs**: a folder of sound files named after the events, chosen in
   Settings > Sounds and events. "Import sound pack" takes a zip of the sound
   files (named after the zip, or after the one folder they are in) and chooses
@@ -169,6 +191,8 @@ Conversation window:
 | Ctrl+V | In the message box: attach a copied image or copied files (text pastes as usual) |
 | Alt+N, then Delete | The attachments waiting to be sent; Delete removes one |
 | Ctrl+M | Change model |
+| Ctrl+Shift+E | Next reasoning effort level (Default, then each level the model takes) |
+| Ctrl+Shift+M | Next permission mode (Claude Code: ask, accept edits, plan, auto) or command setting (ask, run without asking, never) |
 | Ctrl+Shift+Comma | Conversation settings |
 | Ctrl+R | Regenerate the last response |
 | Left / Right | Previous / next buffer of the messages list |
