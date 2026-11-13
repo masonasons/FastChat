@@ -57,6 +57,7 @@ private:
     void BuildMenuIds();
     void FillList(int select = -1);
     wxString RowText(int index) const;
+    void RefreshTimes();  // relative times ("5 minutes ago") as time passes
     bool ShowsRow(int index) const;
     // Whether a message is from before the latest compaction (shown only in
     // the full history).
@@ -162,6 +163,7 @@ private:
     wxButton* m_attach;
     wxButton* m_actions;
     wxTimer m_timer;
+    wxTimer m_timesTimer;
 
     // The response being received
     bool m_running = false;

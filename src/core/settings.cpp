@@ -49,6 +49,7 @@ bool Settings::Load() {
         Get(g, "chatSystemPrompt", general.chatSystemPrompt);
         Get(g, "codeSystemPrompt", general.codeSystemPrompt);
         Get(g, "codeFolder", general.codeFolder);
+        Get(g, "messageTimes", general.messageTimes);
         Get(g, "autoTitle", general.autoTitle);
         Get(g, "titleProviderId", general.titleProviderId);
         Get(g, "titleModel", general.titleModel);
@@ -136,6 +137,7 @@ bool Settings::Save() const {
         {"chatSystemPrompt", general.chatSystemPrompt},
         {"codeSystemPrompt", general.codeSystemPrompt},
         {"codeFolder", general.codeFolder},
+        {"messageTimes", general.messageTimes},
         {"autoTitle", general.autoTitle},
         {"titleProviderId", general.titleProviderId},
         {"titleModel", general.titleModel},

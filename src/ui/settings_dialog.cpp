@@ -62,6 +62,13 @@ private:
         m_focusResponse->SetValue(g.focusResponse);
         s->Add(m_focusResponse, 0, wxALL, 6);
 
+        m_messageTimes = new wxChoice(panel, wxID_ANY);
+        m_messageTimes->Append("Relative (5 minutes ago)");
+        m_messageTimes->Append("Absolute (14:32, with the date when not today)");
+        m_messageTimes->Append("None");
+        m_messageTimes->SetSelection(g.messageTimes == "absolute" ? 1 : g.messageTimes == "none" ? 2 : 0);
+        s->Add(LabeledRow(panel, "T&imes in the messages list:", m_messageTimes, 0), 0, wxALL, 6);
+
         m_effort = new wxChoice(panel, wxID_ANY);
         for (const auto& [key, label] : EffortChoices()) {
             m_effort->Append(label);
@@ -552,6 +559,8 @@ private:
         g.confirmDeletes = m_confirmDeletes->GetValue();
         g.autoTitle = m_autoTitle->GetValue();
         g.focusResponse = m_focusResponse->GetValue();
+        static const char* kTimes[] = {"relative", "absolute", "none"};
+        g.messageTimes = kTimes[std::clamp(m_messageTimes->GetSelection(), 0, 2)];
         g.reasoningEffort = EffortChoices()[std::max(0, m_effort->GetSelection())].first;
         g.maxTokens = m_maxTokens->GetValue();
         g.chatSystemPrompt = S(m_chatPrompt->GetValue());
@@ -596,6 +605,7 @@ private:
     wxCheckBox* m_autoTitle;
     wxCheckBox* m_focusResponse;
     wxChoice* m_effort;
+    wxChoice* m_messageTimes;
     wxSpinCtrl* m_maxTokens;
     wxTextCtrl* m_chatPrompt;
     wxTextCtrl* m_codePrompt;

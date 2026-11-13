@@ -209,7 +209,11 @@ Conversation window:
 | Ctrl+W | Close |
 
 In the messages list, the model's text and each command it runs are separate
-rows: "Command: cmake --build build, exit code 0".
+rows: "Command: cmake --build build, exit code 0, 5 minutes ago". Each row ends
+with when it was: relative by default ("just now", "5 minutes ago", kept up to
+date as time passes), or absolute ("14:32", with the date when not today) or
+none, in Settings > General > Times in the messages list. A row holds one line;
+Enter on it opens the whole message, line breaks and all, in a read-only box.
 
 The messages list has buffers, switched with Left and Right (or Actions >
 Show): All, Conversation (your messages and the replies), Responses, Yours,

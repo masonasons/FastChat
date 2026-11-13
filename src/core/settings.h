@@ -33,6 +33,7 @@ struct GeneralSettings {
     std::string chatSystemPrompt;
     std::string codeSystemPrompt;     // added to the built-in coding instructions
     std::string codeFolder;           // where new code conversations start (a folder of projects); empty: none
+    std::string messageTimes = "relative";  // times in the messages list: "relative", "absolute", "none"
     bool autoTitle = true;            // name untitled conversations from their first exchange
     std::string titleProviderId;      // empty: the conversation's own
     std::string titleModel;

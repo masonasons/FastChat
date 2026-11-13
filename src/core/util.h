@@ -24,6 +24,10 @@ std::string FormatIsoUtc(int64_t unixSeconds);
 int64_t StartOfMonthUtc();
 // "today", "yesterday", "3 days ago", or a date.
 std::string FormatRelativeTime(int64_t unixSeconds);
+// "just now", "5 minutes ago", "2 days ago", "3 months ago".
+std::string FormatAgo(int64_t when, int64_t now);
+// The time of day ("14:32"), with the date when not today ("2026-11-12 14:32").
+std::string FormatClockTime(int64_t when, int64_t now);
 
 // "12,345"
 std::string FormatThousands(int64_t n);

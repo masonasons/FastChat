@@ -114,7 +114,8 @@ std::string AgentSummary(const Message& m) {
 
 ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conversation)
     : wxFrame(nullptr, wxID_ANY, "", wxDefaultPosition, wxSize(900, 650)), m_main(main), m_conv(conversation),
-      m_timer(this) {
+      m_timer(this),
+      m_timesTimer(this) {
     m_runner = std::make_shared<ChatRunner>([](std::function<void()> fn) { PostToUi(std::move(fn)); });
     m_runner->SetListener(this);
 
@@ -187,7 +188,11 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
     Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ShowActions(); }, ID_ACTIONS);
     Bind(wxEVT_CHAR_HOOK, &ConversationFrame::OnCharHook, this);
     Bind(wxEVT_CLOSE_WINDOW, &ConversationFrame::OnClose, this);
-    Bind(wxEVT_TIMER, [this](wxTimerEvent&) { SetPendingRow(false); });
+    Bind(wxEVT_TIMER, [this](wxTimerEvent& e) {
+        if (&e.GetTimer() == &m_timesTimer) RefreshTimes();
+        else SetPendingRow(false);
+    });
+    m_timesTimer.Start(30000);
     Bind(wxEVT_HOTKEY, [this](wxKeyEvent&) { Stop(); }, kStopHotkeyId);
 
     m_input->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
@@ -396,7 +401,31 @@ wxString ConversationFrame::RowText(int index) const {
         }
     }
     if (text.size() > kMaxRowChars) text = TruncateUtf8(text, kMaxRowChars) + "...";
+    // When it was, last, so the row starts with what it says.
+    const std::string& times = AppSettings().general.messageTimes;
+    if (m.createdAt > 0 && times != "none") {
+        text += ", " + (times == "absolute" ? FormatClockTime(m.createdAt, NowSeconds()) : FormatAgo(m.createdAt, NowSeconds()));
+    }
     return U(text);
+}
+
+void ConversationFrame::RefreshTimes() {
+    // "5 minutes ago" moves on. The row being read is left alone (changing it
+    // would make the screen reader read it again); it catches up once left.
+    if (AppSettings().general.messageTimes != "relative") return;
+    int selected = m_list->HasFocus() ? m_list->GetSelection() : -1;
+    bool frozen = false;
+    for (int row = 0; row < static_cast<int>(m_rows.size()) && row < static_cast<int>(m_list->GetCount()); row++) {
+        if (row == selected) continue;
+        wxString text = RowText(m_rows[row]);
+        if (text == m_list->GetString(static_cast<unsigned>(row))) continue;
+        if (!frozen) {
+            m_list->Freeze();
+            frozen = true;
+        }
+        m_list->SetString(static_cast<unsigned>(row), text);
+    }
+    if (frozen) m_list->Thaw();
 }
 
 int ConversationFrame::RowForMessage(int index) const {
@@ -1491,6 +1520,13 @@ void ConversationFrame::OnCharHook(wxKeyEvent& e) {
         else Close();
         return;
     }
+    // Enter on a message opens it whole, in a read-only box. Caught here: the
+    // window's own keyboard handling can take Enter before the list sees it.
+    if ((e.GetKeyCode() == WXK_RETURN || e.GetKeyCode() == WXK_NUMPAD_ENTER) && !e.HasAnyModifiers() &&
+        wxWindow::FindFocus() == m_list && SelectedMessage() >= 0) {
+        ViewMessage(SelectedMessage());
+        return;
+    }
     e.Skip();
 }
 
@@ -2067,6 +2103,7 @@ void ConversationFrame::ConversationUpdated(const Conversation& c) {
 }
 
 void ConversationFrame::SettingsChanged() {
+    FillList(SelectedMessage());  // the times may be shown another way
     UpdateStatusBar();
 }
 

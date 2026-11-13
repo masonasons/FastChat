@@ -86,6 +86,19 @@ static void TestSse() {
 }
 
 static void TestUtil() {
+    // Times in the messages list.
+    const int64_t now = 1794500000;
+    CHECK_EQ(FormatAgo(now - 10, now), std::string("just now"));
+    CHECK_EQ(FormatAgo(now + 5, now), std::string("just now"));  // a clock a little ahead
+    CHECK_EQ(FormatAgo(now - 60, now), std::string("1 minute ago"));
+    CHECK_EQ(FormatAgo(now - 5 * 60 - 20, now), std::string("5 minutes ago"));
+    CHECK_EQ(FormatAgo(now - 3 * 3600, now), std::string("3 hours ago"));
+    CHECK_EQ(FormatAgo(now - 86400, now), std::string("1 day ago"));
+    CHECK_EQ(FormatAgo(now - 15 * 86400, now), std::string("2 weeks ago"));
+    CHECK_EQ(FormatAgo(now - 65 * 86400, now), std::string("2 months ago"));
+    CHECK_EQ(FormatAgo(now - 800 * 86400, now), std::string("2 years ago"));
+    CHECK_EQ(FormatClockTime(now - 60, now).size(), size_t{5});  // today: "14:32"
+    CHECK_EQ(FormatClockTime(now - 3 * 86400, now), FormatLocalTime(now - 3 * 86400));  // other days: with the date
     // Folders as typed for a code conversation: names inside the base folder.
 #ifdef _WIN32
     CHECK_EQ(ResolveFolder("FastChat", "C:\\dev", "C:\\Users\\me"), std::string("C:\\dev\\FastChat"));

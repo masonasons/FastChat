@@ -142,6 +142,27 @@ std::string FormatRelativeTime(int64_t unixSeconds) {
     return FormatLocalTime(unixSeconds);
 }
 
+std::string FormatAgo(int64_t when, int64_t now) {
+    int64_t d = std::max<int64_t>(0, now - when);
+    auto ago = [](int64_t n, const char* unit) { return std::to_string(n) + " " + unit + (n == 1 ? "" : "s") + " ago"; };
+    if (d < 45) return "just now";
+    if (d < 3600) return ago(std::max<int64_t>(1, d / 60), "minute");
+    if (d < 86400) return ago(d / 3600, "hour");
+    if (d < 7 * 86400) return ago(d / 86400, "day");
+    if (d < 30 * 86400) return ago(d / (7 * 86400), "week");
+    if (d < 365 * 86400) return ago(d / (30 * 86400), "month");
+    return ago(d / (365 * 86400), "year");
+}
+
+std::string FormatClockTime(int64_t when, int64_t now) {
+    std::tm then = LocalTm(when);
+    std::tm today = LocalTm(now);
+    char buf[64];
+    bool sameDay = then.tm_year == today.tm_year && then.tm_yday == today.tm_yday;
+    std::strftime(buf, sizeof(buf), sameDay ? "%H:%M" : "%Y-%m-%d %H:%M", &then);
+    return buf;
+}
+
 std::string FormatThousands(int64_t n) {
     bool neg = n < 0;
     std::string digits = std::to_string(neg ? -n : n);
