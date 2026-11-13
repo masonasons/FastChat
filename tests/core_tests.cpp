@@ -1363,6 +1363,15 @@ static void TestUpdater(const std::string& dir) {
     CHECK(UpdateBlocker(plain).empty());
     CHECK(!UpdateBlocker(JoinPath(dir, "no-such-folder")).empty());
 
+    // The real thing, when asked for: GitHub's latest build of FastChat.
+    if (const char* real = std::getenv("FASTCHAT_REAL_UPDATE"); real && *real) {
+        UpdateInfo latest = CheckForUpdate();
+        if (!latest.error.empty()) std::cerr << "    error: " << latest.error << "\n";
+        CHECK(latest.error.empty() && !latest.downloadUrl.empty());
+        std::cout << "  GitHub's latest build: " << latest.commit << (latest.available ? ", newer than this one" : ", this one")
+                  << "; package " << latest.downloadUrl << "\n";
+    }
+
     std::string mac = MacUpdateScript(42, "/tmp/FastChat-mac.zip", "/tmp/x", "/Applications/Fast Chat's.app");
     CHECK(mac.find("kill -0 42") != std::string::npos);
     CHECK(mac.find("ditto -x -k '/tmp/FastChat-mac.zip' '/tmp/x'") != std::string::npos);
