@@ -63,4 +63,10 @@ Speech& AppSpeech();
 std::unique_ptr<SpeechBackend> CreatePrismBackend(const std::string& backendName);
 // SAPI 5 on Windows, AVSpeech on the Mac; null elsewhere.
 std::unique_ptr<SpeechBackend> CreateSystemVoiceBackend();
+#ifdef _WIN32
+// The 32-bit SAPI voices, through FastChatSapi32.exe (empty without it).
+std::vector<std::string> Sapi32Voices();
+// Says `text` in a 32-bit voice into a WAV file, silently (for the tests).
+bool Sapi32SpeakToFile(const std::string& voice, const std::string& wavPath, const std::string& text, std::string& error);
+#endif
 std::vector<std::string> ListPrismBackends();

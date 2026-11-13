@@ -313,6 +313,24 @@ if(WIN32)
         RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${FASTCHAT_OUTPUT_DIR})
 endif()
 
+# FastChatSapi32.exe: the 32-bit helper that speaks with 32-bit SAPI voices,
+# which 64-bit FastChat cannot load (src/sapi32). A project of its own, built for
+# Win32 and copied beside FastChat.exe and the tests.
+if(WIN32 AND MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_GENERATOR MATCHES "Visual Studio")
+    include(ExternalProject)
+    ExternalProject_Add(fastchat_sapi32
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/sapi32
+        BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/sapi32
+        CMAKE_GENERATOR ${CMAKE_GENERATOR}
+        CMAKE_GENERATOR_PLATFORM Win32
+        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy <BINARY_DIR>/Release/FastChatSapi32.exe ${FASTCHAT_OUTPUT_DIR}
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/Release
+                COMMAND ${CMAKE_COMMAND} -E copy <BINARY_DIR>/Release/FastChatSapi32.exe ${CMAKE_CURRENT_BINARY_DIR}/Release
+        BUILD_ALWAYS TRUE)
+    add_dependencies(FastChat fastchat_sapi32)
+endif()
+
 if(APPLE)
     # The app bundle, with the version from version.h and the readme in
     # Contents/Resources. FastChat.app is written to the repository root.

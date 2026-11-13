@@ -2,10 +2,11 @@
 # and function it imports, against Windows 7's own export lists (shipped with
 # YY-Thunks in build\_deps). Run from the repository after build.bat:
 #   powershell -ExecutionPolicy Bypass -File tests\check_win7.ps1 [path\to\exe]
-param([string]$Exe = (Join-Path $PSScriptRoot "..\FastChat.exe"))
+param([string]$Exe = (Join-Path $PSScriptRoot "..\FastChat.exe"), [string]$Arch = "x64")
 $ErrorActionPreference = "Stop"
 
-$cfg = Join-Path $PSScriptRoot "..\build\_deps\yythunks-src\Config\x64\6.1.7600.txt"
+# x86 for FastChatSapi32.exe, the 32-bit helper.
+$cfg = Join-Path $PSScriptRoot "..\build\_deps\yythunks-src\Config\$Arch\6.1.7600.txt"
 if (-not (Test-Path $cfg)) { throw "Windows 7 export lists not found ($cfg); build with FASTCHAT_WIN7 on first." }
 $win7 = @{}
 $dll = $null

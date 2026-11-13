@@ -1648,6 +1648,26 @@ int main() {
 #ifdef _WIN32
         backend.reset();
         if (SUCCEEDED(com)) CoUninitialize();
+#ifdef _WIN64
+        // The 32-bit voices, through FastChatSapi32.exe (built beside the tests):
+        // listed, and one says a sentence into a WAV file, silently.
+        CHECK(fs::exists(PathFromUtf8(JoinPath(GetExecutableDir(), "FastChatSapi32.exe"))));
+        std::vector<std::string> voices32 = Sapi32Voices();
+        std::cout << "SAPI 5 32-bit voices: " << voices32.size() << "\n";
+        if (!voices32.empty()) {
+            std::string wav = JoinPath(dir, "sapi32.wav");
+            std::string error;
+            bool said = Sapi32SpeakToFile(voices32.front(), wav, "Hello from a 32-bit voice.", error);
+            if (!said) std::cerr << "    " << voices32.front() << ": " << error << "\n";
+            CHECK(said);
+            std::error_code ec;
+            auto size = fs::file_size(PathFromUtf8(wav), ec);
+            std::cout << "  " << voices32.front() << " (32-bit) said it in " << size << " bytes of WAV\n";
+            CHECK(!ec && size > 4000);
+        }
+        std::string err;
+        CHECK(!Sapi32SpeakToFile("No such voice", JoinPath(dir, "none.wav"), "x", err) && !err.empty());
+#endif
 #endif
     }
     TestUtil();

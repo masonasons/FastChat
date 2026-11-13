@@ -61,7 +61,9 @@ jobs:
 
       - name: Check FastChat.exe runs on Windows 7
         shell: pwsh
-        run: tests\check_win7.ps1
+        run: |
+          tests\check_win7.ps1
+          tests\check_win7.ps1 -Exe FastChatSapi32.exe -Arch x86
 
       - name: Package
         shell: cmd

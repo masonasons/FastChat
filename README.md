@@ -87,7 +87,11 @@ providers, written in C++ with wxWidgets.
   sentence as they arrive. Tool calls and commands are only spoken with "Speak
   tool calls and commands" on (Settings > Speech, or per conversation). Speech goes through **Prism** (statically linked:
   NVDA, JAWS, ZDSR, OneCore, SAPI, UIA... or automatic) or straight to **SAPI 5**
-  with its own voice, rate and volume.
+  with its own voice, rate and volume. That includes 32-bit SAPI voices, which
+  64-bit FastChat cannot load itself: FastChatSapi32.exe, a small 32-bit helper
+  beside it, speaks with them (a voice installed only for 32-bit programs is
+  listed as "Name (32-bit)"), and an old voice that crashes takes down only the
+  helper, which starts again when next needed.
 - **Sound packs**: a folder of sound files named after the events, chosen in
   Settings > Sounds and events. "Import sound pack" takes a zip of the sound
   files (named after the zip, or after the one folder they are in) and chooses

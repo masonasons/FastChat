@@ -27,6 +27,8 @@ mkdir "dist_temp\FastChat"
 
 copy /y "FastChat.exe" "dist_temp\FastChat\" >nul
 copy /y "README.md" "dist_temp\FastChat\" >nul
+REM The 32-bit helper that speaks with 32-bit SAPI voices.
+if exist "FastChatSapi32.exe" copy /y "FastChatSapi32.exe" "dist_temp\FastChat\" >nul
 REM Sound packs that come with FastChat, if there are any.
 if exist "soundpacks\" xcopy /e /i /q /y "soundpacks" "dist_temp\FastChat\soundpacks" >nul
 REM portable.txt beside the exe keeps settings and conversations in that folder.
