@@ -18,7 +18,12 @@ if not exist "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" (
     echo Error: cannot find the Visual Studio C++ tools.
     exit /b 1
 )
+REM The CMake on the PATH (Prism needs CMake 4), found before vcvars64 puts
+REM Visual Studio's own, older one ahead of it.
+set "CMAKE="
+for /f "delims=" %%c in ('where cmake 2^>nul') do if not defined CMAKE set "CMAKE=%%c"
 call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+if not defined CMAKE set "CMAKE=cmake"
 
 set "PRISM=ON"
 set "DIST="
@@ -34,13 +39,13 @@ goto :args
 
 REM The first run fetches and builds wxWidgets, Prism and the rest into build\,
 REM which takes a while; later runs reuse them.
-cmake -S . -B build -A x64 -DFASTCHAT_PRISM=%PRISM%
+"%CMAKE%" -S . -B build -A x64 -DFASTCHAT_PRISM=%PRISM%
 if errorlevel 1 goto :error
 REM A running FastChat.exe cannot be replaced but can be renamed: move it aside so
 REM the build can write the new one (restart FastChat to use it).
 if exist FastChat.old.exe del /q FastChat.old.exe >nul 2>&1
 if exist FastChat.exe move /y FastChat.exe FastChat.old.exe >nul 2>&1
-cmake --build build --config Release --parallel %TARGETS% -- /nodeReuse:false
+"%CMAKE%" --build build --config Release --parallel %TARGETS% -- /nodeReuse:false
 if errorlevel 1 goto :error
 
 if defined DIST (

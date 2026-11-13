@@ -152,10 +152,14 @@ if(FASTCHAT_PRISM)
     set(PRISM_ENABLE_GDEXTENSION OFF CACHE BOOL "" FORCE)
     set(PRISM_ENABLE_SHIMS OFF CACHE BOOL "" FORCE)
     set(PRISM_ENABLE_LINTING OFF CACHE BOOL "" FORCE)
+    # Pinned to the commit FastChat is tested with (master moves, and a change
+    # there could bring in, say, a function Windows 7 lacks). Its only submodule
+    # is for the Godot extension, which is off. Prism needs C23: CMake 4 knows
+    # how to ask MSVC for it.
     FetchContent_Declare(prism
         GIT_REPOSITORY https://github.com/ethindp/prism.git
-        GIT_TAG master
-        GIT_SHALLOW TRUE
+        GIT_TAG c574a1e4d0b3ebfe0c8b556bf19d39a9d521dfcc
+        GIT_SUBMODULES ""
     )
     FetchContent_MakeAvailable(prism)
 endif()

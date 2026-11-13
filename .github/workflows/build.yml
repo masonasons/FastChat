@@ -29,6 +29,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Prism needs CMake 4 (C23 with MSVC); the image's is older.
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
       # CMake fetches and builds wxWidgets, Prism and the rest into build\ the
       # first time; keep them between runs.
       - name: Cache CMake dependencies
@@ -103,8 +107,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Ninja
-        run: brew install ninja
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
 
       - name: Cache CMake dependencies
         uses: actions/cache@v4

@@ -758,6 +758,19 @@ static void TestAgents(const std::string& root) {
     CHECK_EQ(afterResult.text, std::string("Hello from fake Claude. Resumed sess-9. "));
     for (const auto& m : afterResult.messages) CHECK(!IsAgentCompactionNote(m));
 
+    // A background task that ends after the reply gets a turn of its own, and
+    // its approvals still reach FastChat (standard input stays open for it).
+    std::cout << "  claude code: a background task's own turn\n";
+    {
+        ChatTurn bg = live;
+        bg.request.messages = {UserMessage("Start something in the background")};
+        TestListener done = Drive(bg);
+        CHECK(done.outcome == ChatListener::Outcome::Done);
+        bool allowed = false;
+        for (const auto& m : done.messages) allowed = allowed || m.content == "Background done (allow).";
+        CHECK(allowed);
+    }
+
     // Questions with choices are always put to the user (even with everything
     // allowed), and the answers go back keyed by question.
     std::cout << "  claude code: questions\n";

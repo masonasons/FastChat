@@ -186,6 +186,25 @@ elif "run" in prompt and not no_tools:
     stream_text("It printed hi.")
     assistant("msg_2", {"type": "text", "text": "It printed hi."})
     result(0.0125)
+elif "background" in prompt:
+    # A background shell still running when the reply ends: when it finishes,
+    # Claude Code reports it in a turn of its own, which can ask for approval.
+    import time
+    out({"type": "system", "subtype": "task_started", "task_id": "bg2", "tool_use_id": "toolu_bg2",
+         "description": "Long build", "is_backgrounded": True, "task_type": "local_bash"})
+    stream_text("Started it.")
+    assistant("msg_1", {"type": "text", "text": "Started it."})
+    result(0.001)
+    time.sleep(1.5)
+    out({"type": "system", "subtype": "task_notification", "task_id": "bg2", "tool_use_id": "toolu_bg2",
+         "status": "completed", "summary": "Build finished"})
+    out({"type": "control_request", "request_id": "req-bg", "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+         "input": {"command": "echo done"}, "tool_use_id": "toolu_bg3"}})
+    answer = next_message(timeout=5)
+    verdict = answer["response"]["response"]["behavior"] if isinstance(answer, dict) else "Stream closed"
+    stream_text("Background done (%s)." % verdict)
+    assistant("msg_2", {"type": "text", "text": "Background done (%s)." % verdict})
+    result(0.001)
 elif "question" in prompt:
     # AskUserQuestion, as Claude Code 2.1 asks it: the answers come back in the
     # tool's input, keyed by question.

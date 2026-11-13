@@ -325,6 +325,11 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
     // comes.
     bool stdinOpen = true;
     std::chrono::steady_clock::time_point closeAt{};
+    // Background tasks (shells, agents) still running. When one ends after the
+    // reply, Claude Code reports it in a turn of its own, whose approvals also
+    // need standard input; so it stays open while any runs.
+    std::set<std::string> running;
+    bool betweenTurns = false;  // a reply has ended and no new one has started
     double totalCost = 0;
     bool anyCost = false;
 
@@ -370,6 +375,7 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
             continue;
         }
         if (compaction && !summary) flushCompaction();
+        if (type == "stream_event" || type == "assistant" || type == "user" || type == "control_request") betweenTurns = false;
 
         if (type == "system" && Str(ev, "subtype") == "init") {
             session = Str(ev, "session_id");
@@ -407,6 +413,15 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 e.status = Str(ev, "status");
                 e.outputFile = Str(ev, "output_file");
                 e.summary = Str(ev, "summary");
+            }
+            if (subtype == "task_started") {
+                running.insert(e.id);
+            } else if (!e.status.empty() && e.status != "running" && e.status != "pending") {
+                running.erase(e.id);
+                // The last one ended between turns: its report turn should come soon.
+                if (running.empty() && betweenTurns && waiting.empty() && stdinOpen) {
+                    closeAt = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                }
             }
             activity(e);
         } else if (type == "system" && Str(ev, "subtype") == "status") {
@@ -603,8 +618,12 @@ ChatResult ClaudeCodeProvider::RunAgent(const AgentTurn& turn, const AgentCallba
                 result.error = why.empty() ? "Claude Code stopped: " + Str(ev, "subtype") : why;
                 result.errorDetails = "Claude Code reported: " + OneLine(line, 3000) + "\n";
             }
-            if (!waiting.empty() && result.error.empty()) {
-                closeAt = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            betweenTurns = true;
+            if (result.error.empty() && (!waiting.empty() || !running.empty())) {
+                // A message of the user's, or a background task's report, is still
+                // to come as a turn of its own. With tasks running, input stays
+                // open until they end (Claude Code waits for them anyway).
+                if (running.empty()) closeAt = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             } else if (stdinOpen) {
                 child.CloseStdin();
                 stdinOpen = false;
