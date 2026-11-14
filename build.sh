@@ -40,7 +40,10 @@ done
 # (build-native/ for native),
 # which takes a while; later runs reuse them. A running FastChat keeps running
 # from the old copy; quit and reopen it to use the new one.
-cmake -S . -B $BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DFASTCHAT_PRISM=$PRISM "-DCMAKE_OSX_ARCHITECTURES=$ARCHS"
+# The Ninja on the PATH now, not the one a reused build folder remembers (CI
+# installs it somewhere new each run).
+cmake -S . -B $BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DFASTCHAT_PRISM=$PRISM "-DCMAKE_OSX_ARCHITECTURES=$ARCHS" \
+    "-DCMAKE_MAKE_PROGRAM=$(command -v ninja)"
 cmake --build $BUILD $TARGETS
 
 if [ -n "$DIST" ]; then
