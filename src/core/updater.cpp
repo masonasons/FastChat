@@ -175,6 +175,10 @@ std::string WindowsUpdateScript(unsigned long pid, const std::string& zipPath, c
     std::string zip = Bat(zipPath), extract = Bat(extractDir), app = Bat(appDir);
     std::string s;
     s += "@echo off\r\nchcp 65001 >nul\r\nsetlocal enableextensions\r\n";
+    // Started from PowerShell 7, its module path would lead Windows PowerShell
+    // to modules it cannot load (Expand-Archive among them); without one it
+    // uses its own.
+    s += "set \"PSModulePath=\"\r\n";
     s += "set /a TRIES=0\r\n";
     s += ":wait\r\n";
     s += "tasklist /fi \"PID eq " + p + "\" 2>nul | find \"" + p + "\" >nul\r\n";
@@ -188,10 +192,17 @@ std::string WindowsUpdateScript(unsigned long pid, const std::string& zipPath, c
     s += "set \"PSMAJOR=0\"\r\n";
     s += "for /f \"usebackq delims=\" %%v in (`powershell -NoProfile -Command \"$PSVersionTable.PSVersion.Major\" 2^>nul`) do set \"PSMAJOR=%%v\"\r\n";
     s += "if \"%PSMAJOR%\"==\"\" set \"PSMAJOR=0\"\r\n";
-    s += "if %PSMAJOR% GEQ 5 (\r\n";
-    s += "  powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath '" + Ps(zipPath) +
-         "' -DestinationPath '" + Ps(extractDir) + "' -Force\"\r\n";
-    s += ") else (\r\n";
+    // Three ways to unzip, each tried while the package's FastChat.exe has not
+    // appeared: Expand-Archive (PowerShell 5), tar (Windows 10 and later), and
+    // the shell's own zip folders (Windows 7).
+    std::string missing = "if not exist \"" + extract + "\\FastChat\\FastChat.exe\" if not exist \"" + extract + "\\FastChat.exe\" ";
+    s += "if %PSMAJOR% GEQ 5 powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath '" +
+         Ps(zipPath) + "' -DestinationPath '" + Ps(extractDir) + "' -Force\"\r\n";
+    s += missing + "if exist \"%SystemRoot%\\System32\\tar.exe\" (\r\n";
+    s += "  if not exist \"" + extract + "\" mkdir \"" + extract + "\"\r\n";
+    s += "  \"%SystemRoot%\\System32\\tar.exe\" -xf \"" + zip + "\" -C \"" + extract + "\"\r\n";
+    s += ")\r\n";
+    s += missing + "(\r\n";
     s += "  powershell -NoProfile -ExecutionPolicy Bypass -Command \"$null=New-Item -ItemType Directory -Force -Path '" +
          Ps(extractDir) + "'; $s=New-Object -ComObject Shell.Application; $z=$s.NameSpace('" + Ps(zipPath) +
          "'); $d=$s.NameSpace('" + Ps(extractDir) +

@@ -1497,32 +1497,38 @@ static void TestUpdater(const std::string& dir) {
 #ifdef _WIN32
     // The Windows script for real (without starting FastChat at the end): the
     // package's FastChat folder replaces the files, and what it lacks stays.
-    std::string root = JoinPath(dir, "update-run");
-    std::string app = JoinPath(root, "app folder's copy");
-    fs::create_directories(PathFromUtf8(app));
-    WriteFileText(JoinPath(app, "FastChat.exe"), "old exe");
-    WriteFileText(JoinPath(app, "README.md"), "old readme");
-    WriteFileText(JoinPath(app, "portable.txt"), "stays");
-    std::string zip = JoinPath(root, "FastChat.zip");
-    WriteZip(zip, {{"FastChat/FastChat.exe", "new exe"}, {"FastChat/README.md", "new readme"}});
-    std::string script = WindowsUpdateScript(999999, zip, JoinPath(root, "extract"), app);  // no such process: no wait
-    CHECK(script.find("start \"\" \"" + app + "\\FastChat.exe\"") != std::string::npos);
-    std::string withoutStart;
-    for (const auto& line : SplitLines(script)) {
-        if (!StartsWith(line, "start ")) withoutStart += line + "\n";
+    // Twice: unzipping with Expand-Archive, then as if that failed (tar does it).
+    for (bool expandArchive : {true, false}) {
+        std::string root = JoinPath(dir, expandArchive ? "update-run" : "update-run-tar");
+        std::string app = JoinPath(root, "app folder's copy");
+        fs::create_directories(PathFromUtf8(app));
+        WriteFileText(JoinPath(app, "FastChat.exe"), "old exe");
+        WriteFileText(JoinPath(app, "README.md"), "old readme");
+        WriteFileText(JoinPath(app, "portable.txt"), "stays");
+        std::string zip = JoinPath(root, "FastChat.zip");
+        WriteZip(zip, {{"FastChat/FastChat.exe", "new exe"}, {"FastChat/README.md", "new readme"}});
+        std::string script = WindowsUpdateScript(999999, zip, JoinPath(root, "extract"), app);  // no such process: no wait
+        CHECK(script.find("start \"\" \"" + app + "\\FastChat.exe\"") != std::string::npos);
+        CHECK(script.find("if %PSMAJOR% GEQ 5 ") != std::string::npos);
+        if (!expandArchive) script = ReplaceAll(script, "if %PSMAJOR% GEQ 5 ", "if %PSMAJOR% GEQ 99 ");
+        std::string withoutStart;
+        for (const auto& line : SplitLines(script)) {
+            if (!StartsWith(line, "start ")) withoutStart += line + "\n";
+        }
+        std::string bat = JoinPath(root, "update.bat");
+        WriteFileText(bat, withoutStart);
+        ProcessResult run = RunShellCommand("\"" + bat + "\"", root, 120000, 100000, nullptr);
+        CHECK(run.started && !run.timedOut);
+        std::string text, exe;
+        bool replaced = ReadFileText(JoinPath(app, "FastChat.exe"), exe) && exe == "new exe";
+        if (!replaced) std::cerr << "    script output (" << (expandArchive ? "Expand-Archive" : "tar") << "): " << run.output << "\n";
+        CHECK(replaced);
+        CHECK(ReadFileText(JoinPath(app, "README.md"), text) && text == "new readme");
+        CHECK(ReadFileText(JoinPath(app, "portable.txt"), text) && text == "stays");
+        CHECK(!fs::exists(PathFromUtf8(JoinPath(root, "extract"))));
+        CHECK(!fs::exists(PathFromUtf8(zip)));
+        CHECK(!fs::exists(PathFromUtf8(bat)));  // it deletes itself
     }
-    std::string bat = JoinPath(root, "update.bat");
-    WriteFileText(bat, withoutStart);
-    ProcessResult run = RunShellCommand("\"" + bat + "\"", root, 120000, 100000, nullptr);
-    CHECK(run.started && !run.timedOut);
-    std::string text;
-    CHECK(ReadFileText(JoinPath(app, "FastChat.exe"), text) && text == "new exe");
-    CHECK(ReadFileText(JoinPath(app, "README.md"), text) && text == "new readme");
-    CHECK(ReadFileText(JoinPath(app, "portable.txt"), text) && text == "stays");
-    CHECK(!fs::exists(PathFromUtf8(JoinPath(root, "extract"))));
-    CHECK(!fs::exists(PathFromUtf8(zip)));
-    CHECK(!fs::exists(PathFromUtf8(bat)));  // it deletes itself
-    if (!run.output.empty() && !(text == "stays")) std::cerr << "    script output: " << run.output << "\n";
 #endif
 }
 
