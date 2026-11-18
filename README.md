@@ -187,6 +187,10 @@ providers, written in C++ with wxWidgets.
   changed), temperature and response length, the model when you have a
   provider of that kind, attachments and citations. A note at the top says
   where it came from and anything that did not come over.
+  VoLlama JSON saves (.json), including older bare message lists, can also be
+  imported. These retain the system prompt, messages, reasoning and tool calls,
+  and use your default model. Saved summaries appear in notes; the full history
+  is restored as context. VoLlama saves do not include attachments or timestamps.
 
 ## Keys
 
@@ -200,7 +204,7 @@ Main window:
 | Delete | Delete |
 | Ctrl+P | Pin or unpin |
 | Ctrl+E | Export |
-| Ctrl+I | Import a conversation (Basilisk .bskc) |
+| Ctrl+I | Import a conversation (Basilisk .bskc or VoLlama .json) |
 | Ctrl+F | Search |
 | Ctrl+Comma | Settings |
 | Ctrl+Shift+A | Account and credits |
@@ -391,7 +395,7 @@ src/core/            everything but the windows
                      importing a pack's zip
   attachments.*      files attached to a message: what they are, where they go
   updater.*          checking the latest build, downloading it, the script that installs it
-  conversation_import.*   other apps' conversations (Basilisk)
+  conversation_import.*   other apps' conversations (Basilisk and VoLlama)
   zip.*              reading zips (miniz)
 src/ui/              the wxWidgets windows and dialogs
 tests/               core tests and the mock server

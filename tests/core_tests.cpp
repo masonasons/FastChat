@@ -1897,6 +1897,61 @@ static void TestAttachments(const std::string& dir) {
     db.Close();
 }
 
+static void TestVoLlamaImport(const std::string& dir) {
+    std::cout << "VoLlama import:\n";
+    ImportedConversation imp;
+    std::string error;
+    json messages = json::array({
+        {{"role", "system"}, {"content", "Be helpful."}},
+        {{"role", "user"}, {"content", "hello"}},
+        {{"role", "assistant"}, {"content", nullptr}, {"extra", {
+            {"reasoning", "Thinking"}, {"tool_calls", json::array({
+                {{"id", "call1"}, {"type", "function"}, {"function", {{"name", "read_file"}, {"arguments", "{\"path\":\"x\"}"}}}}
+            })}}}},
+        {{"role", "tool"}, {"content", "file contents"}, {"extra", {{"tool_call_id", "call1"}, {"name", "read_file"}}}},
+        {{"role", "assistant"}, {"content", "Done"}}
+    });
+    json saved = {{"messages", messages}, {"summary", "Earlier context"}, {"summary_at", 2}};
+    std::string path = JoinPath(dir, "VoLlama chat.json");
+    CHECK(WriteFileText(path, saved.dump()));
+    CHECK(ImportConversationFile(path, imp, error));
+    CHECK(error.empty());
+    CHECK_EQ(imp.source, std::string("VoLlama"));
+    CHECK_EQ(imp.conversation.title, std::string("VoLlama chat"));
+    CHECK_EQ(imp.conversation.settings.systemPrompt.value_or(""), std::string("Be helpful."));
+    CHECK_EQ(imp.exchanges, 1);
+    CHECK_EQ(imp.messages.size(), size_t{6});
+    if (imp.messages.size() == 6) {
+        CHECK(GetNoteKind(imp.messages[0]) == NoteKind::Note);
+        CHECK(imp.messages[1].content.find("Earlier context") != std::string::npos);
+        CHECK_EQ(imp.messages[3].reasoning, std::string("Thinking"));
+        CHECK_EQ(imp.messages[3].toolCalls.size(), size_t{1});
+        if (!imp.messages[3].toolCalls.empty()) {
+            CHECK_EQ(imp.messages[3].toolCalls[0].name, std::string("read_file"));
+            CHECK_EQ(imp.messages[3].toolCalls[0].arguments, std::string("{\"path\":\"x\"}"));
+        }
+        CHECK_EQ(imp.messages[4].toolCallId, std::string("call1"));
+        CHECK_EQ(imp.messages[4].toolName, std::string("read_file"));
+        CHECK_EQ(ContextMessages(imp.messages).size(), size_t{4});
+    }
+    // Old saves were bare lists, with metadata named additional_kwargs.
+    messages[2]["additional_kwargs"] = messages[2]["extra"];
+    messages[2].erase("extra");
+    CHECK(ImportVoLlamaJson(messages.dump(), "Legacy", imp, error));
+    CHECK_EQ(imp.messages.size(), size_t{5});
+    if (imp.messages.size() == 5) CHECK_EQ(imp.messages[2].reasoning, std::string("Thinking"));
+    CHECK(ImportVoLlamaJson("[]", "Empty", imp, error));
+    CHECK_EQ(imp.exchanges, 0);
+    CHECK(!imp.conversation.settings.systemPrompt.has_value());  // no system message: the default prompt
+    for (const std::string bad : {"{", "{}", "{\"messages\":42}", "[42]",
+             "[{\"role\":\"unknown\"}]", "[{\"role\":\"user\",\"content\":[]}]",
+             "[{\"role\":\"assistant\",\"extra\":{\"tool_calls\":[{}]}}]"}) {
+        CHECK(!ImportVoLlamaJson(bad, "Bad", imp, error));
+        CHECK(!error.empty());
+        CHECK(imp.messages.empty());
+    }
+}
+
 // Basilisk conversations (.bskc: a zip with conversation.json and attachments).
 static void TestBasiliskImport(const std::string& dir) {
     std::cout << "Basilisk import:\n";
@@ -2148,6 +2203,7 @@ int main() {
     TestSoundPacks();
     TestSoundPackImport(dir);
     TestBasiliskImport(dir);
+    TestVoLlamaImport(dir);
     TestAttachments(dir);
     TestUpdater(dir);
 

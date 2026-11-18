@@ -75,7 +75,7 @@ std::string CitationLine(const json& c) {
 }  // namespace
 
 const char* ImportFileFilter() {
-    return "Basilisk conversations (*.bskc)|*.bskc|All files (*.*)|*.*";
+    return "Supported conversations (*.bskc;*.json)|*.bskc;*.json|Basilisk conversations (*.bskc)|*.bskc|VoLlama saves (*.json)|*.json|All files (*.*)|*.*";
 }
 
 int64_t ParseIsoTime(const std::string& text) {
@@ -128,8 +128,97 @@ bool ImportConversationFile(const std::string& path, ImportedConversation& out, 
             return ImportBasiliskJson(text, &zip, name, out, error);
         }
     }
-    error = "FastChat cannot read this file as a conversation. It imports Basilisk conversations (.bskc files).";
+    std::string text;
+    if (ReadFileText(path, text)) return ImportVoLlamaJson(text, name, out, error);
+    error = "FastChat cannot read this file as a conversation. It imports Basilisk (.bskc) and VoLlama (.json) conversations.";
     return false;
+}
+
+bool ImportVoLlamaJson(const std::string& jsonText, const std::string& name,
+                      ImportedConversation& out, std::string& error) {
+    out = ImportedConversation();
+    error.clear();
+    json root = json::parse(jsonText, nullptr, false);
+    const json* messages = root.is_array() ? &root :
+        root.is_object() && root.contains("messages") ? &root["messages"] : nullptr;
+    if (!messages || !messages->is_array()) {
+        error = "The VoLlama save could not be read: expected a JSON message list or an object containing one.";
+        return false;
+    }
+    // Validate before producing anything: unrelated JSON must not silently become a chat.
+    for (const auto& item : *messages) {
+        std::string role = Str(item, "role");
+        if (!item.is_object() || (role != "system" && role != "user" && role != "assistant" && role != "tool") ||
+            (item.contains("content") && !item["content"].is_null() && !item["content"].is_string())) {
+            error = "The VoLlama save contains a message with an invalid role or content.";
+            return false;
+        }
+        for (const char* key : {"extra", "additional_kwargs"}) {
+            if (item.contains(key) && !item[key].is_null() && !item[key].is_object()) {
+                error = "The VoLlama save contains invalid message metadata.";
+                return false;
+            }
+        }
+    }
+    ImportedConversation imported;
+    imported.source = "VoLlama";
+    imported.conversation.title = name;
+    imported.conversation.createdAt = NowSeconds();
+    // No provider, model or timestamps are stored by VoLlama. Without a system
+    // message, the conversation keeps the default system prompt (as Basilisk's do).
+    for (const auto& item : *messages) {
+        Message m;
+        m.role = RoleFromKey(Str(item, "role"));
+        m.content = Str(item, "content");
+        json extra = item.value("extra", json());
+        if (!extra.is_object()) extra = item.value("additional_kwargs", json::object());
+        if (!extra.is_object()) extra = json::object();
+        m.providerData["import"] = {{"from", "vollama"}, {"extra", extra}};
+        m.reasoning = Str(extra, "reasoning");
+        m.toolCallId = Str(extra, "tool_call_id");
+        m.toolName = Str(extra, "name");
+        if (auto calls = extra.find("tool_calls"); calls != extra.end() && !calls->is_null()) {
+            if (!calls->is_array()) {
+                error = "The VoLlama save contains an invalid tool call list.";
+                return false;
+            }
+            for (const auto& call : *calls) {
+                auto function = call.find("function");
+                if (!call.is_object() || function == call.end() || !function->is_object() ||
+                    Str(call, "id").empty() || Str(*function, "name").empty()) {
+                    error = "The VoLlama save contains an invalid tool call.";
+                    return false;
+                }
+                auto args = function->find("arguments");
+                m.toolCalls.push_back({Str(call, "id"), Str(*function, "name"),
+                    args == function->end() ? "{}" : args->is_string() ? args->get<std::string>() : JsonDump(*args)});
+            }
+        }
+        // Leading system messages become the prompt; later ones retain their position.
+        if (m.role == Role::System && imported.messages.empty()) {
+            auto& own = imported.conversation.settings.systemPrompt;
+            if (!own) own = std::string();
+            std::string& prompt = *own;
+            if (!prompt.empty()) prompt += "\n\n";
+            prompt += m.content;
+            continue;
+        }
+        if (m.role == Role::User) imported.exchanges++;
+        imported.messages.push_back(m);
+    }
+    std::string intro = "Imported from VoLlama: " + std::to_string(imported.exchanges) +
+        " user messages. Uses your default model. VoLlama saves do not include attachments or timestamps.";
+    imported.messages.insert(imported.messages.begin(), MakeNote(NoteKind::Note, intro, {{"import", "vollama"}}));
+    // Keep the saved summary as a note. Its index cannot be used as FastChat's
+    // database message ID; importing restores the full history as context.
+    std::string summary = root.is_object() ? Str(root, "summary") : std::string();
+    if (!summary.empty()) {
+        imported.messages.insert(imported.messages.begin() + 1, MakeNote(NoteKind::Note,
+            "VoLlama's saved summary (full message history restored as context):\n\n" + summary,
+            {{"import", "vollama"}, {"summary_at", root.value("summary_at", json())}}));
+    }
+    out = std::move(imported);
+    return true;
 }
 
 bool ImportBasiliskJson(const std::string& jsonText, const ZipFile* zip, const std::string& name,

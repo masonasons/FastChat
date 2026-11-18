@@ -1,7 +1,7 @@
 #pragma once
 
 // Conversations from other apps, made into FastChat conversations. Today:
-// Basilisk (.bskc, https://github.com/SigmaNight/basiliskLLM).
+// Basilisk (.bskc) and VoLlama (.json).
 
 #include "core/conversation.h"
 
@@ -13,7 +13,7 @@ class ZipFile;
 struct ImportedConversation {
     Conversation conversation;       // title, type, times and settings; not saved yet
     std::vector<Message> messages;   // in order, the first a note saying where it came from
-    std::string source;              // "Basilisk"
+    std::string source;              // "Basilisk" or "VoLlama"
     int exchanges = 0;               // the user's messages brought over
 };
 
@@ -22,6 +22,10 @@ const char* ImportFileFilter();
 
 // Reads another app's conversation file. `error` says why not, in a sentence.
 bool ImportConversationFile(const std::string& path, ImportedConversation& out, std::string& error);
+
+// Current VoLlama saves and legacy bare lists (including additional_kwargs).
+bool ImportVoLlamaJson(const std::string& jsonText, const std::string& name,
+                      ImportedConversation& out, std::string& error);
 
 // Basilisk's conversation.json; `zip` (may be null) is the .bskc it came from,
 // for its attachments. `name` stands in for a missing title.
