@@ -1,5 +1,6 @@
-// A pseudo-terminal on macOS and Linux, in its own process group so that Kill
-// ends everything FreeBuff started.
+// A pseudo-terminal on macOS and Linux. forkpty makes the child a session
+// leader (setsid), so it leads its own process group and Kill ends everything
+// FreeBuff started.
 
 #include "core/platform.h"
 #include "core/util.h"
@@ -74,7 +75,6 @@ bool PseudoTerminal::Start(const std::vector<std::string>& argv, const std::stri
         return false;
     }
     if (pid == 0) {
-        setpgid(0, 0);
         if (!workingDir.empty() && chdir(workingDir.c_str()) != 0) _exit(127);
         // A full-screen interface needs to know what sort of terminal it is in;
         // without these it draws nothing at all.
@@ -88,7 +88,9 @@ bool PseudoTerminal::Start(const std::vector<std::string>& argv, const std::stri
         execv(argv[0].c_str(), args.data());
         _exit(127);
     }
-    setpgid(pid, pid);
+    // No setpgid here: if it came before the child's setsid, the child would
+    // already lead a process group, setsid would fail, and glibc's forkpty
+    // would end the child before it ran anything.
     m_impl->pid = pid;
     m_impl->fd = fd;
     m_impl->reader = std::thread([this]() { m_impl->ReadLoop(); });

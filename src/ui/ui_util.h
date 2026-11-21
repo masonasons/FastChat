@@ -57,6 +57,9 @@ void ShowError(wxWindow* parent, const wxString& message, const wxString& title 
 // the control for screen readers). Returns the row sizer.
 // Make `text` the label screen readers give `control` (for rows built by hand).
 void LinkLabel(wxStaticText* text, wxWindow* control);
+// GTK: links every label with a mnemonic under `root` to the control after it,
+// as Windows does by itself (called when a window is shown). Elsewhere nothing.
+void LinkMnemonicLabels(wxWindow* root);
 wxBoxSizer* LabeledRow(wxWindow* parent, const wxString& label, wxWindow* control, int proportion = 1);
 
 // A three-way choice for per-conversation overrides: "Default (on)", "On", "Off".

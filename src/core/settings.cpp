@@ -202,6 +202,12 @@ bool Settings::Save() const {
     std::string temp = path + ".tmp";
     if (!WriteFileText(temp, root.dump(2, ' ', false, json::error_handler_t::replace))) return false;
     std::error_code ec;
+#ifndef _WIN32
+    // The API keys in it are only obfuscated here (not DPAPI-encrypted as on
+    // Windows): the file is readable by its owner alone.
+    fs::permissions(PathFromUtf8(temp), fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
+    ec.clear();
+#endif
     fs::rename(PathFromUtf8(temp), PathFromUtf8(path), ec);
     if (ec) {
         fs::remove(PathFromUtf8(path), ec);

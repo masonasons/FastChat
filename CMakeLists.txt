@@ -51,7 +51,14 @@ FetchContent_Declare(wxWidgets
     GIT_TAG 776a9a278791fe0d1c79be337e55ab8e53f89587
 )
 set(wxBUILD_SHARED OFF CACHE INTERNAL "")
-set(wxBUILD_USE_STATIC_RUNTIME ON CACHE INTERNAL "")
+# The static C/C++ runtime matters on Windows (no redistributable). On Linux it
+# would add -static-libstdc++, which distributions such as Fedora don't ship,
+# and every one of wxWidgets' configure checks would then fail to link.
+if(WIN32)
+    set(wxBUILD_USE_STATIC_RUNTIME ON CACHE INTERNAL "")
+else()
+    set(wxBUILD_USE_STATIC_RUNTIME OFF CACHE INTERNAL "")
+endif()
 set(wxBUILD_TESTS OFF CACHE INTERNAL "")
 set(wxBUILD_SAMPLES OFF CACHE INTERNAL "")
 set(wxBUILD_DEMOS OFF CACHE INTERNAL "")
@@ -231,7 +238,18 @@ if(APPLE)
     set_source_files_properties(src/core/platform/speech_avspeech.mm src/core/platform/desktop_mac.mm
         PROPERTIES COMPILE_OPTIONS -fobjc-arc)
 elseif(NOT WIN32)
-    list(APPEND FASTCHAT_CORE_SOURCES src/core/platform/desktop_none.cpp)
+    # Computer use under X11: AT-SPI, XTest, XFixes, XRandR, XCB (with XInput) and gdk-pixbuf
+    # (Fedora: at-spi2-core-devel libXtst-devel libXfixes-devel libXrandr-devel
+    # libxcb-devel gdk-pixbuf2-devel; Debian/Ubuntu: libatspi2.0-dev libxtst-dev
+    # libxfixes-dev libxrandr-dev libxcb1-dev libgdk-pixbuf-2.0-dev).
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FASTCHAT_DESKTOP IMPORTED_TARGET x11 xtst xfixes xrandr xcb xcb-xinput atspi-2 gdk-pixbuf-2.0 gio-2.0)
+    if(FASTCHAT_DESKTOP_FOUND)
+        list(APPEND FASTCHAT_CORE_SOURCES src/core/platform/desktop_linux.cpp)
+    else()
+        message(WARNING "Computer use is left out: ${FASTCHAT_DESKTOP_MODULE_NAME} development files are missing")
+        list(APPEND FASTCHAT_CORE_SOURCES src/core/platform/desktop_none.cpp)
+    endif()
 endif()
 
 add_library(fastchat_core STATIC ${FASTCHAT_CORE_SOURCES})
@@ -266,12 +284,21 @@ if(WIN32)
 else()
     find_package(CURL REQUIRED)
     find_package(Threads REQUIRED)
-    target_link_libraries(fastchat_core PUBLIC CURL::libcurl Threads::Threads ${CMAKE_DL_LIBS})
+    target_link_libraries(fastchat_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+    if(APPLE)
+        target_link_libraries(fastchat_core PUBLIC CURL::libcurl)
+    else()
+        # Only its headers: libcurl is loaded at run time (src/core/platform/http_curl.cpp).
+        target_include_directories(fastchat_core PRIVATE $<TARGET_PROPERTY:CURL::libcurl,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
     if(NOT APPLE)
         # forkpty, for Freebuff's pseudo-terminal (in libc on BSD and musl).
         find_library(FASTCHAT_UTIL_LIBRARY util)
         if(FASTCHAT_UTIL_LIBRARY)
             target_link_libraries(fastchat_core PUBLIC ${FASTCHAT_UTIL_LIBRARY})
+        endif()
+        if(FASTCHAT_DESKTOP_FOUND)
+            target_link_libraries(fastchat_core PUBLIC PkgConfig::FASTCHAT_DESKTOP)
         endif()
     endif()
 endif()
@@ -343,6 +370,17 @@ if(WIN32 AND MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_GENERATOR MATCHES "V
                 COMMAND ${CMAKE_COMMAND} -E copy <BINARY_DIR>/Release/FastChatSapi32.exe ${CMAKE_CURRENT_BINARY_DIR}/Release
         BUILD_ALWAYS TRUE)
     add_dependencies(FastChat fastchat_sapi32)
+endif()
+
+if(UNIX AND NOT APPLE)
+    # GTK itself, for the accessibility touches wxWidgets leaves out (labels
+    # naming controls, in src/ui/ui_util.cpp).
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FASTCHAT_GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
+    target_link_libraries(FastChat PRIVATE PkgConfig::FASTCHAT_GTK)
+    # Linux: FastChat goes to the repository root, as FastChat.exe does on Windows.
+    set(FASTCHAT_OUTPUT_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE PATH "Where FastChat is written")
+    set_target_properties(FastChat PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${FASTCHAT_OUTPUT_DIR})
 endif()
 
 if(APPLE)

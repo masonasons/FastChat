@@ -12,6 +12,14 @@
 #include <memory>
 #include <vector>
 
+// The conversations are a plain list box (one line each, "name, type, model,
+// ...") where the system's own list control is the one screen readers read:
+// VoiceOver on the Mac, and Orca on Linux, where wxListCtrl is drawn by
+// wxWidgets itself and shows nothing to accessibility. Windows has columns.
+#if defined(__WXOSX__) || defined(__WXGTK__)
+#define FASTCHAT_LIST_BOX 1
+#endif
+
 class ConversationFrame;
 
 class MainFrame : public wxFrame {
@@ -64,7 +72,7 @@ private:
     // A report list with columns. On the Mac, wxListCtrl is drawn by wxWidgets
     // and VoiceOver cannot read it, so there it is a list box (a native table)
     // with each conversation on one line.
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     wxListBox* m_list;
 #else
     wxListCtrl* m_list;

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Packages FastChat for others.
-#   ./dist.sh            FastChat-mac.zip with FastChat.app (signed ad hoc) and the readme
+#   ./dist.sh            FastChat-mac.zip with FastChat.app (signed ad hoc) and the readme;
+#                        on Linux, FastChat-linux.zip with the program and the readme
 #   ./dist.sh notarize   FastChat-mac.dmg and FastChat-mac.zip, signed with a
 #                        Developer ID and notarized by Apple, so they open
 #                        everywhere without warnings
@@ -24,6 +25,27 @@
 # The signed copy is made in dist_temp; FastChat.app itself stays as built.
 set -e
 cd "$(dirname "$0")"
+
+# Linux: FastChat-linux.zip, a FastChat folder with the program and the readme,
+# which FastChat's updater on Linux installs from (and ./build.sh install
+# copies the same files). It needs GTK 3, libcurl and the X and AT-SPI
+# libraries the desktop has; wxWidgets and Prism are linked in.
+if [ "$(uname -s)" != Darwin ]; then
+    if [ ! -f FastChat ]; then
+        echo "Error: FastChat not found. Run ./build.sh first."
+        exit 1
+    fi
+    ZIPNAME=FastChat-linux.zip
+    rm -rf dist_temp "$ZIPNAME"
+    mkdir -p dist_temp/FastChat
+    cp FastChat README.md dist_temp/FastChat/
+    if [ -d soundpacks ]; then cp -R soundpacks dist_temp/FastChat/; fi
+    if command -v strip >/dev/null 2>&1; then strip --strip-unneeded dist_temp/FastChat/FastChat; fi
+    (cd dist_temp && cmake -E tar cf "../$ZIPNAME" --format=zip FastChat)
+    rm -rf dist_temp
+    echo "Created $ZIPNAME ($(du -k "$ZIPNAME" | cut -f1) KB)."
+    exit 0
+fi
 
 NOTARIZE=
 for arg in "$@"; do

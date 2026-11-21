@@ -20,7 +20,7 @@ struct UpdateInfo {
 const char* BuildCommit();
 
 // The release asset this system updates from: "FastChat.zip" (Windows),
-// "FastChat-mac.zip" (macOS).
+// "FastChat-mac.zip" (macOS), "FastChat-linux.zip" (Linux on x86-64).
 const char* UpdatePackageName();
 
 // What a release (GitHub's JSON for releases/tags/latest) means for a build of
@@ -46,6 +46,13 @@ std::string UpdateBlockerHere();
 std::string WindowsUpdateScript(unsigned long pid, const std::string& zipPath, const std::string& extractDir,
                                 const std::string& appDir);
 std::string MacUpdateScript(long pid, const std::string& zipPath, const std::string& extractDir, const std::string& appBundle);
+// Linux: the package is unpacked into `extractDir` first (ExtractUpdate), and
+// its FastChat folder's files are copied over `appDir`.
+std::string LinuxUpdateScript(long pid, const std::string& extractDir, const std::string& appDir);
+
+// Unpacks a package (a zip) into `dir`, which is emptied first. False, with
+// `error`, when it is unreadable or has no FastChat program in it.
+bool ExtractUpdate(const std::string& zipPath, const std::string& dir, std::string& error);
 
 // Writes that script and starts it; the caller then quits FastChat.
 bool StartUpdateInstall(const std::string& packagePath, std::string& error);

@@ -18,14 +18,20 @@
 #include <exception>
 #include <memory>
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__linux__)
 // An app opened from the Finder or the Dock gets only /usr/bin:/bin:/usr/sbin:/sbin,
 // so Claude Code, Codex (and the node it runs on) and the tools that code
 // conversations run - git, cmake, Homebrew's - would not be found. Take the PATH
-// the user's own shell sets up, as Terminal would have it.
+// the user's own shell sets up, as Terminal would have it. On Linux, one started
+// from the applications menu often lacks what ~/.bashrc adds (~/.local/bin,
+// where Claude Code installs, nvm's node...).
 static void AdoptLoginShellPath() {
     const char* shell = std::getenv("SHELL");
+#ifdef __APPLE__
     std::string sh = shell && *shell ? shell : "/bin/zsh";
+#else
+    std::string sh = shell && *shell ? shell : "/bin/bash";
+#endif
     const std::string mark = "__FASTCHAT_PATH__";
     ProcessResult r = RunShellCommand("'" + sh + "' -ilc 'printf \"" + mark + "%s" + mark + "\" \"$PATH\"'",
                                       GetHomeDir(), 5000, 1 << 16, nullptr);
@@ -65,7 +71,7 @@ public:
             std::abort();
         });
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__linux__)
         AdoptLoginShellPath();
 #endif
 
@@ -129,6 +135,12 @@ public:
     // Ctrl, pressed anywhere in FastChat, silences speech (as it does a screen reader).
     // On the Mac that is Control, as in VoiceOver, not Command.
     int FilterEvent(wxEvent& event) override {
+#ifdef __WXGTK__
+        // Labels name the controls after them, for Orca, as they do on Windows.
+        if (event.GetEventType() == wxEVT_SHOW && static_cast<wxShowEvent&>(event).IsShown()) {
+            if (auto* top = wxDynamicCast(event.GetEventObject(), wxTopLevelWindow)) LinkMnemonicLabels(top);
+        }
+#endif
         if (event.GetEventType() == wxEVT_KEY_DOWN && AppSettings().speech.ctrlStops) {
             int key = static_cast<wxKeyEvent&>(event).GetKeyCode();
 #ifdef __APPLE__

@@ -6,6 +6,9 @@
 #ifdef __WXOSX__
 #include <wx/osx/core/private.h>
 #endif
+#ifdef __WXGTK__
+#include <gtk/gtk.h>
+#endif
 
 void PostToUi(std::function<void()> fn) {
     if (wxTheApp) wxTheApp->CallAfter(std::move(fn));
@@ -46,6 +49,72 @@ void LinkLabel(wxStaticText* text, wxWindow* control) {
     // VoiceOver takes a control's name from the label created just before it,
     // which here is the previous row's: point it at its own.
     if (control->GetPeer() && text->GetLabelPeer()) control->GetPeer()->SetAccessibilityTitleElement(text->GetLabelPeer());
+#elif defined(__WXGTK__)
+    // GTK names a control after the label whose mnemonic widget it is (Orca
+    // reads it), and Alt with the label's letter then moves to it.
+    GtkWidget* label = text->GetHandle();
+    GtkWidget* target = control->GetConnectWidget();
+    if (label && GTK_IS_LABEL(label) && target) gtk_label_set_mnemonic_widget(GTK_LABEL(label), target);
+#endif
+}
+
+#ifdef __WXGTK__
+// The widget in a control that takes the focus: its own, or one inside it (a
+// slider's scale, in the box wxWidgets puts around it). Scrolled windows can
+// take focus too, but the list or text in them is what is read.
+static GtkWidget* FocusTarget(GtkWidget* w) {
+    if (!w) return nullptr;
+    if (gtk_widget_get_can_focus(w) && !GTK_IS_SCROLLED_WINDOW(w)) return w;
+    if (!GTK_IS_CONTAINER(w)) return nullptr;
+    GList* children = gtk_container_get_children(GTK_CONTAINER(w));
+    GtkWidget* found = nullptr;
+    for (GList* c = children; c && !found; c = c->next) found = FocusTarget(GTK_WIDGET(c->data));
+    g_list_free(children);
+    return found;
+}
+#endif
+
+void LinkMnemonicLabels(wxWindow* root) {
+#ifdef __WXGTK__
+    // As on Windows, a label with a mnemonic ("&Conversations") names the
+    // control that follows it. wxWidgets links it to the control's outer
+    // widget, which for a list box, a multi-line text or a slider is a scrolled
+    // window or box around what takes the focus: Orca then finds no name on
+    // what has focus. Name that too.
+    const wxWindowList& children = root->GetChildren();
+    for (auto it = children.begin(); it != children.end(); ++it) {
+        auto* text = wxDynamicCast(*it, wxStaticText);
+        if (!text) continue;
+        wxString mnemonic = text->GetLabel();
+        mnemonic.Replace("&&", "");  // a literal ampersand
+        if (mnemonic.Find('&') == wxNOT_FOUND) continue;
+        GtkWidget* label = text->GetHandle();
+        if (!label || !GTK_IS_LABEL(label)) continue;
+        GtkWidget* current = gtk_label_get_mnemonic_widget(GTK_LABEL(label));
+        for (auto next = std::next(it); next != children.end(); ++next) {
+            wxWindow* w = *next;
+            if (wxDynamicCast(w, wxStaticText)) break;  // another label comes first: nothing to name
+            if (!w->AcceptsFocus() && !w->AcceptsFocusFromKeyboard()) continue;
+            GtkWidget* focus = FocusTarget(w->GetConnectWidget());
+            if (!focus) focus = FocusTarget(w->GetHandle());
+            if (focus && focus != current) {
+                // wxWidgets sets the mnemonic again when it builds the tab
+                // order, so the name goes on the accessible itself, which stays.
+                AtkObject* target = gtk_widget_get_accessible(focus);
+                AtkObject* source = gtk_widget_get_accessible(label);
+                if (target && source) {
+                    atk_object_add_relationship(target, ATK_RELATION_LABELLED_BY, source);
+                    atk_object_add_relationship(source, ATK_RELATION_LABEL_FOR, target);
+                }
+            } else if (focus && !current) {
+                gtk_label_set_mnemonic_widget(GTK_LABEL(label), focus);
+            }
+            break;
+        }
+    }
+    for (wxWindow* child : children) LinkMnemonicLabels(child);
+#else
+    (void)root;
 #endif
 }
 

@@ -60,7 +60,7 @@ providers, written in C++ with wxWidgets.
   and is left out for models that don't reason. Commands (Ctrl+Shift+M for the
   next) switches between asking, running without asking and never running, from
   the next command on; computer use has the same for its actions.
-- **Computer use conversations** (Windows and the Mac) let a model operate this computer.
+- **Computer use conversations** (Windows, the Mac, and Linux in an X11 session) let a model operate this computer.
   It sees the window in front through its accessibility tree (every control,
   numbered, the way a screen reader reads it) and, for models that take
   images, a screenshot. It acts on controls directly (press, set text, focus)
@@ -280,9 +280,10 @@ It works while FastChat is running: the running FastChat.exe is renamed to
 FastChat.old.exe so the new one can be written; restart FastChat to use it.
 
 GitHub Actions (`.github/workflows/build.yml`) builds every push to master on
-Windows (on the windows-2022 image, whose compiler still supports Windows 7)
-and macOS, runs the tests and the Windows 7 check, and replaces the `latest`
-release with FastChat.zip, FastChat-portable.zip and FastChat-mac.zip. Each
+Windows (on the windows-2022 image, whose compiler still supports Windows 7),
+macOS and Linux, runs the tests and the Windows 7 check, and replaces the `latest`
+release with FastChat.zip, FastChat-portable.zip, FastChat-mac.zip and
+FastChat-linux.zip. Each
 build records the commit it was made from (`cmake/BuildCommit.cmake`); the
 updater compares it with the commit the release was made at.
 
@@ -347,8 +348,69 @@ On the Mac:
   rebuilding, remove FastChat from those lists and add it again. The look tool
   lists the window's controls, then the app's open menu and its menu bar.
 
-Linux builds with the same CMakeLists.txt (libcurl for HTTP); it has not been
-tried yet.
+### Linux
+
+With a compiler for C++23 and C23 (GCC 14 or later, or Clang 18; Prism needs
+them), CMake 3.24+, Ninja and the
+development files for GTK 3, libcurl, D-Bus and Speech Dispatcher (speech),
+and AT-SPI, XTest, XFixes, XRandR, XInput and XCB (computer use). On Fedora:
+
+```sh
+sudo dnf install gcc-c++ cmake ninja-build gtk3-devel libcurl-devel dbus-devel \
+    speech-dispatcher-devel glib2-devel libX11-devel libXtst-devel libXfixes-devel \
+    libXrandr-devel libxcb-devel at-spi2-core-devel wayland-devel
+```
+
+On Debian and Ubuntu:
+
+```sh
+sudo apt install g++-14 cmake ninja-build libgtk-3-dev libcurl4-openssl-dev libdbus-1-dev \
+    libspeechd-dev libx11-dev libxtst-dev libxfixes-dev libxrandr-dev libxcb1-dev \
+    libxcb-xinput-dev libatspi2.0-dev libwayland-dev
+```
+
+(Where GCC 14 is not the default, as on Ubuntu 24.04, build with
+`CC=gcc-14 CXX=g++-14 ./build.sh`.)
+
+Then:
+
+```sh
+./build.sh
+./FastChat
+```
+
+It makes the `FastChat` program in this folder. `./build.sh install` also
+installs it in `~/.local/share/fastchat` with an entry in the applications menu;
+that copy updates itself like the Windows and Mac builds, from
+`FastChat-linux.zip` in the latest release (built on Ubuntu 24.04 for x86-64; it
+runs on distributions as new or newer, with GTK 3 and libcurl, which desktops
+have). A FastChat run from this source folder is never replaced: pull and build
+again. `./dist.sh` (or `./build.sh dist`) makes `FastChat-linux.zip`. Without
+the computer use files it still builds, leaving computer use out (CMake says
+so).
+
+On Linux:
+
+- Speech goes through Prism: Orca when it is running, else Speech Dispatcher.
+- The lists FastChat shows are GTK's own, which Orca reads; the conversations
+  list is one line per conversation (name, type, model, last used, messages,
+  cost), as on the Mac. Labels name the controls after them.
+- FastChat takes the PATH your shell sets up (as a terminal has it), so Claude
+  Code (in `~/.local/bin`), Codex, Freebuff and the commands of code
+  conversations are found when it is started from the applications menu too.
+- Data lives in `~/.config/fastchat` (or `$XDG_CONFIG_HOME/fastchat`). API keys
+  are only obfuscated there, not encrypted; the settings file is readable by you
+  alone.
+- Computer use needs an X11 (Xorg) session; under Wayland other apps' windows
+  can't be read or operated, and FastChat says so. It reads windows through
+  AT-SPI, which it turns on for the session if it is off (as Orca does, so that
+  Qt, Chromium and Electron apps show their controls), presses keys and clicks
+  through XTest, and takes screenshots of the monitor the window is on. A
+  character the keyboard layout lacks (an accented letter, a euro sign) is
+  typed by putting it on a spare key for the moment. Ctrl+Alt+Escape stops it:
+  FastChat takes the key for itself, or, where the window manager already has
+  it (MATE's uses it to move focus to the panels), listens for it alongside,
+  so both happen.
 
 ## Tests
 
@@ -362,8 +424,10 @@ build\Release\fastchat_tests.exe
 `powershell -ExecutionPolicy Bypass -File tests\check_win7.ps1` checks every
 function FastChat.exe imports against Windows 7's own export lists.
 
-On the Mac: `./build.sh tests`, `python3 tests/mock_server.py 8765 &`, then
-`FASTCHAT_MOCK=http://127.0.0.1:8765 build/fastchat_tests`.
+On the Mac and Linux: `./build.sh tests`, `python3 tests/mock_server.py 8765 &`,
+then `FASTCHAT_MOCK=http://127.0.0.1:8765 build/fastchat_tests`. On Linux the
+desktop tests use a small GTK window (`tests/desktop_window.py`, which needs
+PyGObject); without an X11 session they say so and are skipped.
 
 `mock_server.py` imitates the OpenAI, Anthropic, Gemini and Ollama streaming
 APIs, and `fake_claude.py` / `fake_codex.py` / `fake_freebuff.py` imitate the
@@ -379,7 +443,8 @@ of a cent).
 
 Settings (`settings.json`, API keys encrypted for your Windows account with
 DPAPI) and conversations (`fastchat.db`) live in `%APPDATA%\FastChat`, or beside
-FastChat.exe when a file named `portable.txt` is there. `FASTCHAT_DATA_DIR`
+FastChat.exe when a file named `portable.txt` is there (on the Mac and Linux,
+see their sections above). `FASTCHAT_DATA_DIR`
 overrides both. Unexpected errors are written to `fastchat.log` there.
 
 ## Layout
@@ -387,7 +452,8 @@ overrides both. Unexpected errors are written to `fastchat.log` there.
 ```
 src/core/            everything but the windows
   providers/         one file per API style: OpenAI-compatible, Anthropic, Gemini, Ollama
-  platform/          HTTP, paths, secrets, processes, SAPI - per system
+  platform/          HTTP, paths, secrets, processes, speech, the desktop
+                     (computer use) - per system
   chat_engine.*      runs a turn on a worker thread, with the tool loop
   code_tools.*       the tools code conversations give the model
   notify.*, speech.*, sound.*, events.*   speech and sound events

@@ -56,7 +56,7 @@ MainFrame::MainFrame() : wxFrame(nullptr, wxID_ANY, APP_NAME, wxDefaultPosition,
     sizer->Add(LabeledRow(panel, "&Search:", m_search), 0, wxEXPAND | wxALL, 6);
 
     sizer->Add(new wxStaticText(panel, wxID_ANY, "&Conversations"), 0, wxLEFT | wxRIGHT, 6);
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     m_list = new wxListBox(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0, nullptr, wxLB_SINGLE);
 #else
     m_list = new wxListCtrl(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
@@ -109,7 +109,7 @@ MainFrame::MainFrame() : wxFrame(nullptr, wxID_ANY, APP_NAME, wxDefaultPosition,
         }
         e.Skip();
     });
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     m_list->Bind(wxEVT_LISTBOX_DCLICK, [this](wxCommandEvent&) {
         wxCommandEvent e;
         OnOpen(e);
@@ -331,7 +331,7 @@ void MainFrame::Fill() {
     }
     m_list->Freeze();
     long selectRow = m_shown.empty() ? -1 : 0;
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     wxArrayString lines;
 #else
     m_list->DeleteAllItems();
@@ -344,7 +344,7 @@ void MainFrame::Fill() {
         if (!c.settings.model.empty()) model = ModelDisplayName(c.settings.providerId, c.settings.model);
         else model = "default";
         wxString cost = c.totalCost > 0 ? U(FormatMoney(c.totalCost)) : wxString("");
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
         wxString line = name + ", " + ConversationTypeName(c.type) + ", " + U(model) + ", " +
                         U(FormatRelativeTime(c.updatedAt)) +
                         wxString::Format(", %lld messages", static_cast<long long>(c.messageCount));
@@ -360,7 +360,7 @@ void MainFrame::Fill() {
 #endif
         if (c.id == selected) selectRow = row;
     }
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     m_list->Set(lines);
 #endif
     if (selectRow >= 0) SelectRow(selectRow);
@@ -368,7 +368,7 @@ void MainFrame::Fill() {
 }
 
 long MainFrame::SelectedRow() const {
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     return m_list->GetSelection();
 #else
     return m_list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
@@ -376,7 +376,7 @@ long MainFrame::SelectedRow() const {
 }
 
 void MainFrame::SelectRow(long row) {
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     m_list->SetSelection(static_cast<int>(row));
     m_list->EnsureVisible(static_cast<int>(row));
 #else
@@ -386,7 +386,7 @@ void MainFrame::SelectRow(long row) {
 }
 
 long MainFrame::RowCount() const {
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
     return static_cast<long>(m_list->GetCount());
 #else
     return m_list->GetItemCount();
@@ -675,7 +675,7 @@ void MainFrame::OnContextMenu(wxContextMenuEvent& e) {
     wxPoint pos = e.GetPosition();
     if (pos == wxDefaultPosition) {
         long row = SelectedRow();
-#ifdef __WXOSX__
+#ifdef FASTCHAT_LIST_BOX
         (void)row;
         pos = m_list->ClientToScreen(wxPoint(0, 0));
 #else

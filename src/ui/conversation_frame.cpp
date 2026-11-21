@@ -3,6 +3,7 @@
 #include "ui/main_frame.h"
 #include "ui/ui_util.h"
 #include "core/database.h"
+#include "core/desktop.h"
 #include "core/platform.h"
 #include "core/soundpack.h"
 #include "core/speech.h"
@@ -14,6 +15,7 @@
 #include <wx/imagpng.h>
 #include <wx/mstream.h>
 #include <wx/richmsgdlg.h>
+#include <wx/weakref.h>
 
 namespace {
 
@@ -193,7 +195,9 @@ ConversationFrame::ConversationFrame(MainFrame* main, const Conversation& conver
         else SetPendingRow(false);
     });
     m_timesTimer.Start(30000);
+#ifndef __WXGTK__
     Bind(wxEVT_HOTKEY, [this](wxKeyEvent&) { Stop(); }, kStopHotkeyId);
+#endif
 
     m_input->Bind(wxEVT_KEY_DOWN, [this](wxKeyEvent& e) {
         int key = e.GetKeyCode();
@@ -921,6 +925,15 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
         // Control, not Command: Command+Option+Escape is the system's Force Quit.
         m_stopHotkey = RegisterHotKey(kStopHotkeyId, wxMOD_RAW_CONTROL | wxMOD_ALT, WXK_ESCAPE);
         const char* stopKeys = "Control+Option+Escape";
+#elif defined(__WXGTK__)
+        // GTK has no global hotkeys in wxWidgets: the desktop layer grabs the key from X.
+        wxWeakRef<ConversationFrame> self(this);
+        m_stopHotkey = GrabStopKey([self]() {
+            PostToUi([self]() {
+                if (self) self->Stop();
+            });
+        });
+        const char* stopKeys = "Ctrl+Alt+Escape";
 #else
         m_stopHotkey = RegisterHotKey(kStopHotkeyId, wxMOD_CONTROL | wxMOD_ALT, WXK_ESCAPE);
         const char* stopKeys = "Ctrl+Alt+Escape";
@@ -933,7 +946,11 @@ bool ConversationFrame::StartTurn(bool compactOnly) {
 
 void ConversationFrame::ReleaseStopHotkey() {
     if (m_stopHotkey) {
+#ifdef __WXGTK__
+        ReleaseStopKey();
+#else
         UnregisterHotKey(kStopHotkeyId);
+#endif
         m_stopHotkey = false;
     }
 }

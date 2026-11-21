@@ -123,6 +123,10 @@ std::vector<ToolDef> ComputerToolDefinitions(bool vision) {
          "Press keys: a combination like cmd+s, cmd+q, shift+tab, cmd+shift+g, or several in turn separated by "
          "spaces (\"down down enter\"). Names: cmd ctrl option (or alt) shift fn enter tab escape space backspace "
          "delete (forward delete) home end pageup pagedown up down left right f1-f20, or single characters.",
+#elif defined(__linux__)
+         "Press keys: a combination like ctrl+s, alt+f4, shift+tab, ctrl+alt+t, or several in turn separated by "
+         "spaces (\"down down enter\"). Names: ctrl alt shift super (or win) enter tab escape space backspace delete "
+         "home end pageup pagedown up down left right f1-f24 menu, or single characters.",
 #else
          "Press keys: a combination like ctrl+s, alt+f4, shift+tab, win+r, or several in turn separated by spaces "
          "(\"down down enter\"). Names: ctrl alt shift win enter tab escape space backspace delete home end pageup "
@@ -153,7 +157,7 @@ std::vector<ToolDef> ComputerToolDefinitions(bool vision) {
 }
 
 ToolOutcome RunComputerTool(const ToolCall& call, ComputerContext& ctx) {
-    if (!ctx.desktop) return Fail("Computer use is not available on this system yet (Windows and the Mac only).");
+    if (!ctx.desktop) return Fail("Computer use is not available on this system yet (Windows, the Mac and Linux under X11 only).");
     json args = ArgumentsToObject(call.arguments);
     const std::string& n = call.name;
     Desktop& d = *ctx.desktop;
@@ -269,6 +273,8 @@ ToolOutcome RunComputerTool(const ToolCall& call, ComputerContext& ctx) {
 std::string ComputerSystemPrompt(bool vision, const std::string& screen) {
 #ifdef __APPLE__
     const char* system = "Mac";
+#elif defined(__linux__)
+    const char* system = "Linux computer";
 #else
     const char* system = "Windows computer";
 #endif
@@ -290,6 +296,11 @@ std::string ComputerSystemPrompt(bool vision, const std::string& screen) {
         "- This is macOS: shortcuts use cmd (cmd+s saves, cmd+w closes a window, cmd+q quits, cmd+tab switches apps), "
         "and an app's menus are in the menu bar at the top of the screen, listed after the window in look; invoke a "
         "menu bar item to open its menu, then look again to see its items.\n";
+#elif defined(__linux__)
+    prompt +=
+        "- This is a Linux desktop (X11): shortcuts use ctrl (ctrl+s saves, ctrl+w closes a tab or window, ctrl+q "
+        "quits, alt+tab switches windows, alt+f4 closes one). Apps that expose nothing to accessibility show only "
+        "their window; use the keyboard, or the mouse with a screenshot, for those.\n";
 #endif
     if (vision) {
         prompt += "- Screenshots are " + screen +

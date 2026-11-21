@@ -1,6 +1,7 @@
 #include "core/updater.h"
 #include "core/platform.h"
 #include "core/util.h"
+#include "core/zip.h"
 
 #include "build_commit.h"  // generated: FASTCHAT_BUILD_COMMIT
 
@@ -78,8 +79,14 @@ const char* BuildCommit() {
 const char* UpdatePackageName() {
 #ifdef __APPLE__
     return "FastChat-mac.zip";
-#else
+#elif defined(_WIN32)
     return "FastChat.zip";
+#elif defined(__x86_64__)
+    return "FastChat-linux.zip";
+#else
+    // Only x86-64 is built for Linux: other processors are told there is no
+    // build for them rather than being given one they cannot run.
+    return "FastChat-linux-other.zip";
 #endif
 }
 
@@ -252,6 +259,70 @@ std::string MacUpdateScript(long pid, const std::string& zipPath, const std::str
     return s;
 }
 
+std::string LinuxUpdateScript(long pid, const std::string& extractDir, const std::string& appDir) {
+    // Waits for FastChat to quit (a minute at most), copies the unpacked
+    // package's files over FastChat's (the program by way of a new file renamed
+    // over the old, so a failed copy leaves the old one), starts it again and
+    // deletes itself. FastChat unpacked the package before quitting.
+    std::string extract = ShellQuote(extractDir), app = ShellQuote(appDir);
+    std::string s;
+    s += "#!/bin/sh\n";
+    s += "i=0\n";
+    s += "while kill -0 " + std::to_string(pid) + " 2>/dev/null; do\n";
+    s += "  i=$((i+1)); [ $i -gt 120 ] && exit 1\n";
+    s += "  sleep 0.5\n";
+    s += "done\n";
+    s += "SRC=" + extract + "\n";
+    s += "[ -f " + extract + "/FastChat/FastChat ] && SRC=" + extract + "/FastChat\n";
+    s += "if [ -f \"$SRC/FastChat\" ]; then\n";
+    s += "  for f in \"$SRC\"/* \"$SRC\"/.[!.]*; do\n";
+    s += "    [ -e \"$f\" ] || continue\n";
+    s += "    name=$(basename \"$f\")\n";
+    s += "    if [ \"$name\" = FastChat ]; then\n";
+    s += "      cp \"$f\" " + app + "/FastChat.new && chmod 755 " + app + "/FastChat.new && mv -f " + app + "/FastChat.new " +
+         app + "/FastChat\n";
+    s += "    else\n";
+    s += "      cp -Rf \"$f\" " + app + "/\n";
+    s += "    fi\n";
+    s += "  done\n";
+    s += "fi\n";
+    s += "rm -rf " + extract + "\n";
+    s += "cd " + app + " && nohup ./FastChat >/dev/null 2>&1 &\n";
+    s += "rm -f \"$0\"\n";
+    return s;
+}
+
+bool ExtractUpdate(const std::string& zipPath, const std::string& dir, std::string& error) {
+    ZipFile zip;
+    if (!zip.Open(zipPath, error)) return false;
+    std::error_code ec;
+    fs::remove_all(PathFromUtf8(dir), ec);
+    fs::create_directories(PathFromUtf8(dir), ec);
+    for (int i = 0; i < zip.Count(); i++) {
+        std::string name = zip.Name(i);
+        // Nothing outside the folder: no absolute paths, no "..".
+        if (name.empty() || name[0] == '/' || name.find("..") != std::string::npos) continue;
+        fs::path target = PathFromUtf8(dir) / PathFromUtf8(name);
+        if (zip.IsFolder(i)) {
+            fs::create_directories(target, ec);
+            continue;
+        }
+        std::string data;
+        if (!zip.Read(i, data, error)) return false;
+        fs::create_directories(target.parent_path(), ec);
+        if (!WriteFileText(PathToUtf8(target), data)) {
+            error = "The update could not be unpacked into " + dir + ".";
+            return false;
+        }
+    }
+    std::error_code found;
+    if (!fs::exists(PathFromUtf8(dir) / "FastChat" / "FastChat", found) && !fs::exists(PathFromUtf8(dir) / "FastChat", found)) {
+        error = "The downloaded package has no FastChat program in it.";
+        return false;
+    }
+    return true;
+}
+
 // Where the running FastChat lives: its folder, or on the Mac its app bundle
 // ("" when it is not in one).
 static std::string AppLocation() {
@@ -301,7 +372,16 @@ bool StartUpdateInstall(const std::string& packagePath, std::string& error) {
     return true;
 #else
     std::string script = PathToUtf8(temp / "fastchat-update.sh");
-    if (!WriteFileText(script, MacUpdateScript(static_cast<long>(getpid()), packagePath, extract, appDir))) {
+#ifdef __APPLE__
+    std::string text = MacUpdateScript(static_cast<long>(getpid()), packagePath, extract, appDir);
+#else
+    // Unpacked here, with FastChat's own zip reader: unzip is not on every system.
+    if (!ExtractUpdate(packagePath, extract, error)) return false;
+    std::error_code removed;
+    fs::remove(PathFromUtf8(packagePath), removed);
+    std::string text = LinuxUpdateScript(static_cast<long>(getpid()), extract, appDir);
+#endif
+    if (!WriteFileText(script, text)) {
         error = "The update script could not be written.";
         return false;
     }

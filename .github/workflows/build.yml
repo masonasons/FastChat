@@ -1,7 +1,7 @@
 name: Build
 
-# Every push to master builds FastChat for Windows and macOS and replaces the
-# rolling "latest" release with the new build. FastChat's updater compares the
+# Every push to master builds FastChat for Windows, macOS and Linux and replaces
+# the rolling "latest" release with the new build. FastChat's updater compares the
 # commit that release was made at (its target) with the commit it was built from.
 
 on:
@@ -95,6 +95,7 @@ jobs:
 
           - Windows: FastChat.zip (keeps its data in %APPDATA%\FastChat), or FastChat-portable.zip (keeps its data beside FastChat.exe). Windows 7 SP1 and later.
           - macOS: FastChat-mac.zip (macOS 11 and later, Apple silicon and Intel). Signed ad hoc, not by an Apple developer: the first time, open it with Control-click > Open.
+          - Linux: FastChat-linux.zip (x86-64; Ubuntu 24.04, Fedora 40 and newer, or anything as new, with GTK 3 and libcurl). Unzip it anywhere and run FastChat in it; computer use needs an X11 session.
           "@
           Set-Content -Path release-notes.md -Value $notes -Encoding utf8
           gh release delete latest --cleanup-tag --yes 2>$null
@@ -133,3 +134,58 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload latest FastChat-mac.zip --clobber
+
+  linux:
+    # After Windows, so the release exists to attach to. Ubuntu 24.04: the
+    # package runs on distributions as new or newer.
+    needs: windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # GCC 14 for Prism's C++23 and C23 (the image's default is 13).
+      - name: Install the compiler and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 libgtk-3-dev libcurl4-openssl-dev libdbus-1-dev libspeechd-dev \
+            libx11-dev libxtst-dev libxfixes-dev libxrandr-dev libxcb1-dev libxcb-xinput-dev libatspi2.0-dev \
+            libwayland-dev
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: cmake-linux-${{ hashFiles('CMakeLists.txt', 'cmake/**') }}
+          restore-keys: cmake-linux-
+
+      - name: Build FastChat and the tests
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: ./build.sh tests
+
+      # No display here: the desktop tests say so and are skipped.
+      - name: Test
+        run: |
+          python3 tests/mock_server.py 8765 &
+          sleep 2
+          FASTCHAT_MOCK=http://127.0.0.1:8765 build/fastchat_tests
+
+      - name: Package
+        run: ./dist.sh
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastChat-linux
+          path: FastChat-linux.zip
+
+      - name: Attach to the latest build
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload latest FastChat-linux.zip --clobber

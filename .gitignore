@@ -35,6 +35,7 @@ __pycache__/
 Thumbs.db
 .DS_Store
 
-# macOS (build.sh)
+# macOS and Linux (build.sh)
 FastChat.app/
+/FastChat
 build-*/

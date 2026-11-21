@@ -3,12 +3,13 @@
 // Seeing and acting on the desktop, for computer use conversations: a target
 // window (never one of FastChat's own), its accessibility tree with numbered
 // elements, screenshots, and keyboard and mouse input. Windows
-// (platform/desktop_windows.cpp) and the Mac (platform/desktop_mac.mm);
-// elsewhere Create() returns null.
+// (platform/desktop_windows.cpp), the Mac (platform/desktop_mac.mm) and Linux
+// under X11 (platform/desktop_linux.cpp); elsewhere Create() returns null.
 //
 // Create and use a Desktop on one thread (on Windows it sets that thread up for
 // COM and per-monitor DPI); the chat worker thread does.
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -70,3 +71,10 @@ public:
     // The screen size in screenshot pixels ("1280 x 720").
     virtual std::string ScreenDescription() = 0;
 };
+
+// Linux: Ctrl+Alt+Escape grabbed for the whole X desktop while computer use
+// works (wxWidgets has no global hotkeys on GTK). `pressed` runs on a thread of
+// its own. False when the key is not to be had: another conversation holds
+// it, or there is no X display. Elsewhere the windows register the key themselves.
+bool GrabStopKey(std::function<void()> pressed);
+void ReleaseStopKey();

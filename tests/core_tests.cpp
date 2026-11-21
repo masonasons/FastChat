@@ -858,10 +858,12 @@ static void TestAgents(const std::string& root) {
             CHECK_EQ(fb.messages[4].providerData["freebuff"].value("session_id", ""), std::string("fb-1"));
         }
         std::cout << "  freebuff: chat and resume\n";
-        TestListener fbChat = RunAgentTurn(freebuff, fb.messages, "Thanks", false, true, root);
+        // In the same folder: Freebuff only resumes a chat in its own project.
+        TestListener fbChat = RunAgentTurn(freebuff, fb.messages, "Thanks", true, true, root);
+        if (!fbChat.error.empty()) std::cerr << "    error: " << fbChat.error << "\n";
         CHECK(fbChat.outcome == ChatListener::Outcome::Done);
-        CHECK(fbChat.text.find("Resumed fb-1") != std::string::npos);
         CHECK_EQ(fbChat.messages.size(), size_t{1});
+        if (fbChat.messages.size() == 1) CHECK(fbChat.messages[0].content.find("Resumed fb-1") != std::string::npos);
 
         // Attachments are saved where Freebuff can read them, and named (a PDF
         // is only named: Freebuff cannot read one).
@@ -873,9 +875,12 @@ static void TestAgents(const std::string& root) {
             AttachToMessage(asked, {{"chart.png", "image/png", "PNG"}, {"report.pdf", "application/pdf", "%PDF"}});
             fbFiles.request.messages = {asked};
             TestListener ff = Drive(fbFiles);
+            if (!ff.error.empty()) std::cerr << "    error: " << ff.error << "\n";
             CHECK(ff.outcome == ChatListener::Outcome::Done);
-            CHECK(ff.text.find("Images: image1.png 3 bytes.") != std::string::npos);
-            CHECK(ff.text.find("A PDF was named.") != std::string::npos);
+            // Freebuff's answer comes from its saved chat, as a message rather than streamed text.
+            std::string answer = ff.messages.empty() ? std::string() : ff.messages.back().content;
+            CHECK(answer.find("Images: image1.png 3 bytes.") != std::string::npos);
+            CHECK(answer.find("A PDF was named.") != std::string::npos);
         }
     }
 
@@ -1380,6 +1385,139 @@ static void TestDesktop() {
 }
 #endif
 
+#if defined(__linux__)
+// The Linux desktop layer against a small GTK window (tests/desktop_window.py),
+// through accessibility only: no keystrokes or clicks reach the real desktop
+// unless FASTCHAT_TEST_INPUT is set. Without an X11 session it says why.
+static void TestDesktopLinux() {
+    std::cout << "Desktop (computer use):\n";
+    auto desktop = Desktop::Create();
+    CHECK(desktop != nullptr);
+    if (!desktop) return;
+    std::string why = desktop->Unavailable();
+    if (!why.empty()) {
+        std::cout << "  not available here: " << why << "\n";
+        return;
+    }
+    std::string python = FindProgram("python3");
+    if (python.empty()) {
+        std::cout << "  no python3, so no test window\n";
+        return;
+    }
+    std::string script = JoinPath(PathToUtf8(fs::path(__FILE__).parent_path()), "desktop_window.py");
+    ChildProcess window;
+    std::string error;
+    CHECK(window.Start({python, script}, "", {}, error));
+    std::string line;
+    unsigned long xid = 0;
+    for (int i = 0; i < 50 && !xid; i++) {
+        if (window.ReadLine(line, 200) == ChildProcess::Read::Line && StartsWith(line, "xid ")) xid = std::stoul(line.substr(4));
+    }
+    if (!xid) {
+        std::cout << "  the test window did not open (no PyGObject?): " << OneLine(window.Stderr(), 200) << "\n";
+        window.Kill();
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    auto pressed = [&]() {
+        bool got = false;
+        for (int i = 0; i < 10 && !got; i++) {
+            got = window.ReadLine(line, 100) == ChildProcess::Read::Line && line == "pressed";
+        }
+        return got;
+    };
+    auto fieldText = [&]() {
+        window.Write("text?\n");
+        for (int i = 0; i < 20; i++) {
+            if (window.ReadLine(line, 100) == ChildProcess::Read::Line && StartsWith(line, "text ")) return line.substr(5);
+        }
+        return std::string("(no answer)");
+    };
+
+    desktop->SetTargetHandle(reinterpret_cast<void*>(static_cast<uintptr_t>(xid)));
+    CHECK(desktop->TargetDescription().find("FastChat test window") != std::string::npos);
+    CHECK(desktop->ListWindows().find("FastChat test window") != std::string::npos);
+    std::string tree = desktop->Tree(200);
+    if (std::getenv("FASTCHAT_TEST_SHOW_TREE")) std::cout << tree;
+    CHECK(tree.find("FastChat test window") != std::string::npos);
+    int editId = 0, buttonId = 0;
+    for (const auto& l : SplitLines(tree)) {
+        size_t open = l.find('['), close = l.find(']');
+        if (open == std::string::npos || close == std::string::npos) continue;
+        int id = std::stoi(l.substr(open + 1, close - open - 1));
+        if (l.find("] edit") != std::string::npos && !editId) editId = id;
+        if (l.find("button \"Press me\"") != std::string::npos) buttonId = id;
+    }
+    CHECK(editId > 0);
+    CHECK(buttonId > 0);
+    std::string message;
+    CHECK(desktop->SetText(editId, "hello from FastChat", message));
+    CHECK_EQ(fieldText(), std::string("hello from FastChat"));
+    CHECK(desktop->Invoke(buttonId, message));
+    CHECK(pressed());
+    CHECK_EQ(desktop->ElementDescription(buttonId), std::string("Press me button"));
+    int x = 0, y = 0;
+    CHECK(desktop->ElementPoint(buttonId, x, y));
+    CHECK(!desktop->Invoke(9999, message));
+    CHECK(message.find("no element") != std::string::npos);
+    Screenshot shot;
+    CHECK(desktop->Capture(shot, error));
+    CHECK(shot.width > 0 && shot.width <= 1280 && shot.height <= 800);
+    std::string jpeg = Base64Decode(shot.base64);
+    CHECK(jpeg.size() > 1000 && static_cast<unsigned char>(jpeg[0]) == 0xFF && static_cast<unsigned char>(jpeg[1]) == 0xD8);
+    std::cout << "  tree: " << SplitLines(tree).size() << " lines; screenshot " << shot.width << " x " << shot.height << ", "
+              << FormatBytes(jpeg.size()) << "\n";
+
+    // The tools: looking is free; acting asks, and a "no" stops it.
+    ComputerContext ctx;
+    ctx.desktop = desktop.get();
+    ctx.vision = true;
+    std::vector<std::string> asked;
+    bool allow = false;
+    ctx.approve = [&](const std::string& what) {
+        asked.push_back(what);
+        return allow;
+    };
+    ToolOutcome look = RunComputerTool({"1", "look", "{}"}, ctx);
+    CHECK(!look.error);
+    CHECK_EQ(look.images.size(), size_t{1});
+    CHECK(asked.empty());
+    ToolOutcome no = RunComputerTool({"2", "invoke", JsonDump({{"element", buttonId}})}, ctx);
+    CHECK(no.error);
+    CHECK(!pressed());
+    CHECK_EQ(asked.size(), size_t{1});
+    if (!asked.empty()) CHECK_EQ(asked[0], std::string("Press Press me button"));
+    allow = true;
+    ToolOutcome yes = RunComputerTool({"3", "invoke", JsonDump({{"element", buttonId}})}, ctx);
+    CHECK(!yes.error);
+    CHECK(pressed());
+    ctx.approval = "deny";
+    ToolOutcome denied = RunComputerTool({"4", "set_text", JsonDump({{"element", editId}, {"text", "x"}})}, ctx);
+    CHECK(denied.error);
+
+    // Real keystrokes and a click, only when asked: they take the focus for a moment.
+    if (const char* input = std::getenv("FASTCHAT_TEST_INPUT"); input && *input) {
+        std::string msg;
+        desktop->SetText(editId, "", msg);
+        desktop->FocusElement(editId, msg);
+        if (desktop->TypeText("abc", msg)) {
+            CHECK(desktop->PressKeys("ctrl+a", msg));
+            CHECK(desktop->TypeText("Hi there, caf\xC3\xA9 \xE2\x82\xAC", msg));  // an accented letter and the euro sign
+            CHECK_EQ(fieldText(), std::string("Hi there, caf\xC3\xA9 \xE2\x82\xAC"));
+            int bx = 0, by = 0;
+            desktop->ElementPoint(buttonId, bx, by);
+            CHECK(desktop->Click(bx, by, "left", 1, msg));
+            CHECK(pressed());
+            std::cout << "  keyboard and mouse: typed, selected, clicked\n";
+        } else {
+            std::cout << "  keyboard and mouse: skipped (" << msg << ")\n";
+        }
+    }
+    window.Write("quit\n");
+    if (window.Wait(3000) < 0) window.Kill();
+}
+#endif
+
 #ifdef __APPLE__
 // The Mac desktop layer, without touching the screen: it can be made, measures
 // the display, lists windows, and refuses unknown elements. Reading other apps
@@ -1675,6 +1813,48 @@ static void TestUpdater(const std::string& dir) {
     CHECK(mac.find("kill -0 42") != std::string::npos);
     CHECK(mac.find("ditto -x -k '/tmp/FastChat-mac.zip' '/tmp/x'") != std::string::npos);
     CHECK(mac.find("open '/Applications/Fast Chat'\\''s.app'") != std::string::npos);  // quoted for the shell
+
+#if defined(__linux__)
+    // The Linux update for real (without starting FastChat at the end): the
+    // package is unpacked, its FastChat folder's files replace FastChat's, the
+    // program stays runnable, and what the package lacks stays.
+    {
+        std::string root = JoinPath(dir, "update-run-linux");
+        std::string app = JoinPath(root, "app folder's copy");
+        fs::create_directories(PathFromUtf8(app));
+        WriteFileText(JoinPath(app, "FastChat"), "old program");
+        WriteFileText(JoinPath(app, "README.md"), "old readme");
+        WriteFileText(JoinPath(app, "portable.txt"), "stays");
+        std::string zip = JoinPath(root, "FastChat-linux.zip");
+        WriteZip(zip, {{"FastChat/FastChat", "new program"}, {"FastChat/README.md", "new readme"},
+                       {"../escaped.txt", "no"}});
+        std::string extract = JoinPath(root, "extract");
+        std::string error;
+        CHECK(ExtractUpdate(zip, extract, error));
+        CHECK(!fs::exists(PathFromUtf8(JoinPath(root, "escaped.txt"))));
+        std::string script = LinuxUpdateScript(999999, extract, app);  // no such process: no wait
+        CHECK(script.find("nohup ./FastChat") != std::string::npos);
+        std::string withoutStart;
+        for (const auto& line : SplitLines(script)) {
+            if (line.find("nohup") == std::string::npos) withoutStart += line + "\n";
+        }
+        std::string sh = JoinPath(root, "update.sh");
+        WriteFileText(sh, withoutStart);
+        ProcessResult run = RunShellCommand("sh '" + sh + "'", root, 60000, 100000, nullptr);
+        CHECK(run.started && !run.timedOut);
+        std::string text;
+        CHECK(ReadFileText(JoinPath(app, "FastChat"), text) && text == "new program");
+        CHECK(ReadFileText(JoinPath(app, "README.md"), text) && text == "new readme");
+        CHECK(ReadFileText(JoinPath(app, "portable.txt"), text) && text == "stays");
+        CHECK((fs::status(PathFromUtf8(JoinPath(app, "FastChat"))).permissions() & fs::perms::owner_exec) != fs::perms::none);
+        CHECK(!fs::exists(PathFromUtf8(extract)));
+        CHECK(!fs::exists(PathFromUtf8(sh)));  // it deletes itself
+        std::string bad = JoinPath(root, "bad.zip");
+        WriteZip(bad, {{"something/else.txt", "x"}});
+        CHECK(!ExtractUpdate(bad, extract, error));
+        std::cout << "  linux update: unpacked, replaced, kept the rest\n";
+    }
+#endif
 
 #ifdef _WIN32
     // The Windows script for real (without starting FastChat at the end): the
@@ -2221,6 +2401,8 @@ int main() {
     TestDesktop();
 #elif defined(__APPLE__)
     TestDesktopMac();
+#elif defined(__linux__)
+    TestDesktopLinux();
 #endif
 
     // The real Claude Code, when asked for (it uses the account it is logged in with).

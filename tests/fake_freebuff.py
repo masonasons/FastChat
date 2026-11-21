@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# The model catalog FastChat reads out of the program, as the real one has it compiled in:
+# "fake/alpha":{section:"free",order:10,more:!0} "fake/beta":{section:"premium",order:20}
 """A stand-in for Freebuff's terminal interface, for FastChat's tests.
 
 Freebuff has no headless mode, so FastChat drives it the way BlindPilot does: a
@@ -48,9 +50,15 @@ def main():
     if resume:
         chat_id = resume
     else:
+        # Ids are unique across projects, as the real ones are: FastChat
+        # finds a new chat by its id in any project's folder.
+        projects = os.path.join(root, "projects")
+        taken = lambda name: any(
+            os.path.exists(os.path.join(projects, p, "chats", name)) for p in os.listdir(projects)
+        )
         number = 1
         chat_id = "fb-1"
-        while os.path.exists(os.path.join(chats, chat_id)):
+        while taken(chat_id):
             number += 1
             chat_id = "fb-%d" % number
     chat = os.path.join(chats, chat_id)
