@@ -84,6 +84,9 @@ private:
     int m_updateTimerHours = -1;   // what it is set for (-1: not set)
     bool m_updateChecking = false;
     bool m_updateInstalling = false;
+    // "Update available" (or another update message) is open: its event loop
+    // runs the timers, and a scheduled check must not open another on top.
+    bool m_updateAsking = false;
     // An automatic install waiting for responses to finish.
     std::unique_ptr<UpdateInfo> m_pendingUpdate;
     wxTimer m_pendingTimer;

@@ -178,7 +178,7 @@ bool MainFrame::AnyConversationBusy() const {
 }
 
 void MainFrame::CheckForUpdates(bool automatic) {
-    if (m_updateChecking || m_updateInstalling) return;
+    if (m_updateChecking || m_updateInstalling || m_updateAsking) return;
     m_updateChecking = true;
     if (!automatic) {
         SetStatusText("Checking for updates...", 0);
@@ -192,6 +192,13 @@ void MainFrame::CheckForUpdates(bool automatic) {
 }
 
 void MainFrame::UpdateChecked(const UpdateInfo& info, bool automatic) {
+    // A message box runs its own event loop, where the scheduled check can
+    // fire again: left unanswered on an unattended computer, they piled up.
+    m_updateAsking = true;
+    struct Done {
+        bool& asking;
+        ~Done() { asking = false; }
+    } done{m_updateAsking};
     if (!info.error.empty()) {
         if (automatic) AppendLog("Update check: " + info.error);
         else ShowError(this, U(info.error), "Check for updates");
