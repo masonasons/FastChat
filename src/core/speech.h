@@ -2,8 +2,8 @@
 
 // Speech output: through Prism (whatever screen reader is running, or a speech
 // engine it supports) or directly through the system's own voices: SAPI 5 on
-// Windows, AVSpeech on the Mac. UI thread only (except LoadVoices and
-// CachedVoices).
+// Windows, AVSpeech on the Mac, Speech Dispatcher on Linux. UI thread only
+// (except LoadVoices and CachedVoices).
 
 #include "core/settings.h"
 
@@ -44,7 +44,7 @@ public:
     // For the settings dialog.
     static bool PrismAvailable();
     static bool SystemVoicesAvailable();
-    // "SAPI 5 voices", "macOS voices (AVSpeech)".
+    // "SAPI 5 voices", "macOS voices (AVSpeech)", "Speech Dispatcher voices".
     static std::string SystemVoicesName();
     static std::vector<std::string> PrismBackendNames();
     // Voices of an engine ("prism" with a backend name, or "system"). Blocks
@@ -71,8 +71,13 @@ Speech& AppSpeech();
 
 // Implementations
 std::unique_ptr<SpeechBackend> CreatePrismBackend(const std::string& backendName);
-// SAPI 5 on Windows, AVSpeech on the Mac; null elsewhere.
+// SAPI 5 on Windows, AVSpeech on the Mac, Speech Dispatcher on Linux (null
+// when it cannot be reached); null elsewhere.
 std::unique_ptr<SpeechBackend> CreateSystemVoiceBackend();
+#ifdef FASTCHAT_HAVE_SPEECHD
+// Whether libspeechd could be loaded (the server is started when needed).
+bool SpeechDispatcherInstalled();
+#endif
 #ifdef _WIN32
 // The 32-bit SAPI voices, through FastChatSapi32.exe (empty without it).
 std::vector<std::string> Sapi32Voices();

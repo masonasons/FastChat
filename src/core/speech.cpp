@@ -157,7 +157,7 @@ std::vector<std::string> ListPrismBackends() {
 
 #endif
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(FASTCHAT_HAVE_SPEECHD)
 std::unique_ptr<SpeechBackend> CreateSystemVoiceBackend() {
     return nullptr;
 }
@@ -244,6 +244,8 @@ bool Speech::PrismAvailable() {
 bool Speech::SystemVoicesAvailable() {
 #if defined(_WIN32) || defined(__APPLE__)
     return true;
+#elif defined(FASTCHAT_HAVE_SPEECHD)
+    return SpeechDispatcherInstalled();
 #else
     return false;
 #endif
@@ -252,6 +254,8 @@ bool Speech::SystemVoicesAvailable() {
 std::string Speech::SystemVoicesName() {
 #ifdef __APPLE__
     return "macOS voices (AVSpeech)";
+#elif defined(FASTCHAT_HAVE_SPEECHD)
+    return "Speech Dispatcher voices";
 #else
     return "SAPI 5 voices";
 #endif

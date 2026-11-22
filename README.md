@@ -128,8 +128,9 @@ providers, written in C++ with wxWidgets.
   `{model} is responding`. Responses can be spoken when complete or sentence by
   sentence as they arrive. Tool calls and commands are only spoken with "Speak
   tool calls and commands" on (Settings > Speech, or per conversation). Speech goes through **Prism** (statically linked:
-  NVDA, JAWS, ZDSR, OneCore, SAPI, UIA... or automatic) or straight to **SAPI 5**
-  with its own voice, rate and volume. That includes 32-bit SAPI voices, which
+  NVDA, JAWS, ZDSR, OneCore, SAPI, UIA... or automatic) or straight to the
+  system's own voices with their own voice, rate and volume: **SAPI 5** on
+  Windows, AVSpeech on the Mac, **Speech Dispatcher** on Linux. On Windows that includes 32-bit SAPI voices, which
   64-bit FastChat cannot load itself: FastChatSapi32.exe, a small 32-bit helper
   beside it, speaks with them (a voice installed only for 32-bit programs is
   listed as "Name (32-bit)"), and an old voice that crashes takes down only the
@@ -391,7 +392,13 @@ so).
 
 On Linux:
 
-- Speech goes through Prism: Orca when it is running, else Speech Dispatcher.
+- Speech goes through Prism (Orca when it is running, else Speech Dispatcher),
+  or, with "Speech Dispatcher voices" as the engine, straight to Speech
+  Dispatcher with a voice, rate and volume of its own, whichever voice Orca
+  uses. Every output module's voices are listed (espeak-ng, RHVoice, Piper...);
+  espeak-ng's variants ("English (America)+Max") only for your own language.
+  libspeechd is loaded when FastChat starts, so it runs without it (with no
+  Speech Dispatcher voices to offer).
 - The lists FastChat shows are GTK's own, which Orca reads; the conversations
   list is one line per conversation (name, type, model, last used, messages,
   cost), as on the Mac. Labels name the controls after them.

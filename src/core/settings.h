@@ -50,7 +50,7 @@ struct GeneralSettings {
 
 struct SpeechSettings {
     bool enabled = true;
-    std::string engine = "prism";     // "prism", "system" (SAPI 5 / AVSpeech)
+    std::string engine = "prism";     // "prism", "system" (SAPI 5 / AVSpeech / Speech Dispatcher)
     std::string prismBackend = "auto";// "auto" or a Prism backend name
     std::string voice;                // empty: the engine's default
     int rate = 50;                    // 0-100

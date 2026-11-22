@@ -2307,7 +2307,15 @@ int main() {
         size_t voices = Speech::ListVoices("prism", "OneCore").size();
         std::cout << "OneCore voices: " << voices << "\n";
     }
-    if (Speech::SystemVoicesAvailable()) {
+    bool systemVoices = Speech::SystemVoicesAvailable();
+#if !defined(_WIN32) && !defined(__APPLE__)
+    // Speech Dispatcher: libspeechd may be there without the server (as on CI).
+    if (systemVoices && !CreateSystemVoiceBackend()) {
+        std::cout << "Speech Dispatcher cannot be reached: its voices are not tested\n";
+        systemVoices = false;
+    }
+#endif
+    if (systemVoices) {
 #ifdef _WIN32
         // SAPI is COM; in FastChat wxWidgets has set COM up on the UI thread.
         HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
